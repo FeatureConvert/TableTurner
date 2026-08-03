@@ -19,18 +19,20 @@ The biochemistry — coordinates, strand, reading frame, translation, start codo
    - **Record Info** — organism, molecule type, topology, and the rest of the record-level metadata.
    - **Sequence** — the nucleotide sequence (split across multiple cells if it's a long genome — Excel caps a single cell around 32,767 characters).
    - **Features** — one row per gene/CDS/tRNA/rRNA/misc_feature, in genome order. Strand is inferred from whether Start or End is larger; you don't need to add a separate gene row for each CDS, that's generated automatically.
-2. Run whichever converter you need:
+2. Convert it — two ways, pick whichever fits:
+   - **Ask Claude (recommended).** This repo includes a bundled Claude skill (`.claude/skills/genbank-converter/`), so if you're working with Claude Code or Cowork in this repo folder, it loads automatically — just ask Claude to "convert my filled template to a BankIt feature table" (or "to a GenBank flat file"), and it'll run the right script and report back any warnings.
+   - **Or run it yourself from the command line:**
 
-   ```
-   python3 xlsx_to_feature_table.py your_filled_template.xlsx output.tbl.txt
-   python3 xlsx_to_genbank.py your_filled_template.xlsx output.gb
-   ```
+     ```
+     python3 xlsx_to_feature_table.py your_filled_template.xlsx output.tbl.txt
+     python3 xlsx_to_genbank.py your_filled_template.xlsx output.gb
+     ```
 
-   (Needs `openpyxl`: `pip install openpyxl`.)
+     (Needs `openpyxl`: `pip install openpyxl`.)
 3. Read the warnings the script prints — they flag real issues (missing product on a CDS, coordinates out of range, a translation that came out empty because of a typo'd gene span) rather than being cosmetic noise.
 4. Upload the feature table to BankIt/WebSub, or keep the .gb file for your own records.
 
-See `GenBank_Protocol_DRAFT.docx` for the full step-by-step lab protocol, including how to run this through Claude if you'd rather not touch the command line at all.
+See `GenBank_Protocol_DRAFT.docx` for the full step-by-step lab protocol.
 
 ## Files
 
@@ -40,6 +42,7 @@ See `GenBank_Protocol_DRAFT.docx` for the full step-by-step lab protocol, includ
 | `xlsx_to_feature_table.py` | Converts a filled template to NCBI's BankIt feature table format |
 | `xlsx_to_genbank.py` | Converts a filled template to a full GenBank flat file (.gb) |
 | `GenBank_Protocol_DRAFT.docx` | Step-by-step lab protocol, from filling out the template through submission |
+| `.claude/skills/genbank-converter/` | The bundled Claude skill — loads automatically when using Claude Code/Cowork in this repo folder |
 
 ## Example
 

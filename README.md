@@ -51,6 +51,10 @@ See `GenBank_Protocol_DRAFT.docx` for the full step-by-step lab protocol, includ
 
 It turns a spreadsheet *table* into a GenBank feature *table* — and turns the tables on the hours of manual formatting that used to take.
 
+## Acknowledgments
+
+TableTurner was built to help streamline a real lab workflow: [Dr. Kristin Parent](https://kparentlab.natsci.msu.edu/), Michigan State University, provided the real-world phage genome sequencing/annotation protocol and annotation data this tool was designed around and validated against, including feature-by-feature testing against a real published NCBI record. The tool itself was written by Robert Houston (not a domain scientist), to save a lab member from doing this conversion by hand — and shared publicly in the hope it's useful to anyone else facing the same tedious conversion.
+
 ## How to cite
 
 TableTurner is free to use under the MIT license (see below) — no legal obligation to cite it. But if it saved you time on an annotation that made it into a publication, an acknowledgment or citation is genuinely appreciated and helps justify continued work on tools like this. Suggested citation:

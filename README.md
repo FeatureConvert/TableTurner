@@ -84,7 +84,7 @@ See `CITATION.cff` for a machine-readable version — GitHub's "Cite this reposi
 
 - **Hitting an error or a warning you don't understand?** Check `TROUBLESHOOTING.md` first — it covers the common ones with fixes.
 - **Tool bugs, feature requests, anything about how the scripts/template work:** open an issue at [github.com/FeatureConvert/TableTurner/issues](https://github.com/FeatureConvert/TableTurner/issues) — Robert Houston maintains the tool.
-- **Annotation/biology questions** — is this the right product name, should this feature be marked partial, that kind of scientific judgment call, not tool mechanics — that's Dr. Kristin Parent's territory, not the tool maintainer's.
+- **Annotation/biology questions** — is this the right way to annotate a feature, should something be marked partial, what's the correct convention for a given case — that's a GenBank/NCBI question, not the tool maintainer's. See the [NCBI Feature Table spec](https://www.ncbi.nlm.nih.gov/genbank/feature_table/) and [sample GenBank record](https://www.ncbi.nlm.nih.gov/genbank/samplerecord/), or contact NCBI directly at info@ncbi.nlm.nih.gov for genuinely ambiguous cases.
 
 ## License
 

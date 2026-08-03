@@ -59,5 +59,5 @@ Also expected — NCBI curation can merge or remove features between submission 
 ## Still stuck?
 
 - **Tool bugs / script errors / anything that looks like a defect in the conversion logic:** open an issue at [github.com/FeatureConvert/TableTurner/issues](https://github.com/FeatureConvert/TableTurner/issues).
-- **"Is this the right way to annotate this feature" / other biology judgment calls:** that's a question for Dr. Kristin Parent, not the tool — see the README's "Questions / support" section.
+- **"Is this the right way to annotate this feature" / other biology judgment calls:** that's a GenBank/NCBI question, not the tool — see the README's "Questions / support" section for where to look.
 - **Every time you use the tool:** verify the output yourself before submitting — no second reviewer is required, but the person running the tool is responsible for checking it. See "Verifying the output" in `GenBank_Protocol.docx`.

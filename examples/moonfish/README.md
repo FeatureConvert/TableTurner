@@ -43,7 +43,7 @@ Two independent checks were run against real data, not synthetic test cases, bef
 - **Minus-strand partial markers (`<`/`>`) were backwards.** The INSDC spec ties `<`/`>` to genomic coordinate position, not reading direction, so the correct placement flips on the minus strand relative to the plus strand — this was fixed and verified against Biopython's own location parser.
 - **A gene's short label (e.g. "gp61") wasn't being represented in the flat file at all.** NCBI's own processing folds this into `/note` rather than a second `/product` line — confirmed by inspecting the real published record and matched exactly.
 - **The first codon of a CDS wasn't always translated as Met.** Standard convention (and genetic code table 11, used for phage) translates a gene's true start codon as Met even for alternate starts like GTG or TTG, which would translate as Val/Leu anywhere else in the frame. Missing this caused several real minus-strand genes to come out with the wrong first amino acid — found by diffing translations against the published record's, confirmed against Biopython's own `translate(cds=True)`.
-- **Paired `gene` features weren't being auto-generated for each CDS.** Every CDS in the published record has a matching `gene` feature (85-for-85 here); the tool now generates this automatically, matching the feature-table converter's existing behavior.
+- **Paired `gene` features weren't being auto-generated for each CDS.** Every CDS in a GenBank record needs a matching `gene` feature; the tool now generates this automatically for all 85 CDS in this draft, matching the feature-table converter's existing behavior. (The published record itself has 82 CDS/82 gene, one-to-one — see the note below on why that count differs from this draft's 85.)
 
 Two more differences turned out to be expected, not bugs:
 - The draft has **85 CDS**; the published record has **82** — NCBI curation merged/removed 3 entries between submission and publication. Confirmed by checking the published record's locus_tag numbering directly (gaps exist where entries were removed).
@@ -53,9 +53,12 @@ Two more differences turned out to be expected, not bugs:
 
 ## Try it yourself
 
+The converter scripts live at the repo root, one folder up from here, so run them from there and point them at the files in this folder:
+
 ```
-python3 xlsx_to_feature_table.py GenBank_Annotation_Template_FILLED_moonfish.xlsx my_output.tbl.txt
-python3 xlsx_to_genbank.py GenBank_Annotation_Template_FILLED_moonfish.xlsx my_output.gb
+cd ..
+python3 xlsx_to_feature_table.py examples/moonfish/GenBank_Annotation_Template_FILLED_moonfish.xlsx examples/moonfish/my_output.tbl.txt
+python3 xlsx_to_genbank.py examples/moonfish/GenBank_Annotation_Template_FILLED_moonfish.xlsx examples/moonfish/my_output.gb
 ```
 
 Then diff `my_output.tbl.txt` against `generated_feature_table.tbl.txt`, or `my_output.gb` against `generated_genbank.gb` — they should match exactly, since nothing about the conversion logic depends on anything outside this repo.

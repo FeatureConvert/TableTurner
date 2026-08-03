@@ -35,7 +35,7 @@ The biochemistry — coordinates, strand, reading frame, translation, start codo
 4. **Spot-check the output before you trust it — every time, not just while you're new to it.** The person running the tool is responsible for reviewing its output before submission; no second reviewer is required. Confirm the Locus/Sequence Name, organism, and a handful of CDS products/coordinates match what you expect, and see "Verifying the output" in the protocol doc for a fuller checklist.
 5. Upload the feature table to BankIt/WebSub, or keep the .gb file for your own records.
 
-See `GenBank_Protocol_DRAFT.docx` for the full step-by-step lab protocol.
+See `GenBank_Protocol.docx` for the full step-by-step lab protocol.
 
 ## Files
 
@@ -44,7 +44,7 @@ See `GenBank_Protocol_DRAFT.docx` for the full step-by-step lab protocol.
 | `GenBank_Annotation_Template.xlsx` | Blank template — start here |
 | `xlsx_to_feature_table.py` | Converts a filled template to NCBI's BankIt feature table format |
 | `xlsx_to_genbank.py` | Converts a filled template to a full GenBank flat file (.gb) |
-| `GenBank_Protocol_DRAFT.docx` | Step-by-step lab protocol, from filling out the template through submission |
+| `GenBank_Protocol.docx` | Step-by-step lab protocol, from filling out the template through submission |
 | `.claude/skills/genbank-converter/` | The bundled Claude skill — loads automatically when using Claude Code/Cowork in this repo folder |
 | `TROUBLESHOOTING.md` | Common errors, warnings, and data-entry gotchas, with fixes |
 

@@ -30,7 +30,8 @@ The biochemistry — coordinates, strand, reading frame, translation, start codo
 
      (Needs `openpyxl`: `pip install openpyxl`.)
 3. Read the warnings the script prints — they flag real issues (missing product on a CDS, coordinates out of range, a translation that came out empty because of a typo'd gene span) rather than being cosmetic noise.
-4. Upload the feature table to BankIt/WebSub, or keep the .gb file for your own records.
+4. **Spot-check the output before you trust it — always, on your first few uses,** regardless of whatever ongoing review policy your lab settles on. Confirm the Locus/Sequence Name, organism, and a handful of CDS products/coordinates match what you expect, and see "Verifying the output" in the protocol doc for a fuller checklist.
+5. Upload the feature table to BankIt/WebSub, or keep the .gb file for your own records.
 
 See `GenBank_Protocol_DRAFT.docx` for the full step-by-step lab protocol.
 
@@ -75,6 +76,11 @@ Houston, R. TableTurner: Excel-to-GenBank annotation conversion. https://github.
 ```
 
 See `CITATION.cff` for a machine-readable version — GitHub's "Cite this repository" button (top right of the repo page) will generate APA/BibTeX formats from it automatically.
+
+## Questions / support
+
+- **Tool bugs, feature requests, anything about how the scripts/template work:** open an issue at [github.com/FeatureConvert/TableTurner/issues](https://github.com/FeatureConvert/TableTurner/issues) — Robert Houston maintains the tool.
+- **Annotation/biology questions** — is this the right product name, should this feature be marked partial, that kind of scientific judgment call, not tool mechanics — that's Dr. Kristin Parent's territory, not the tool maintainer's.
 
 ## License
 

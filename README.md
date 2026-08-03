@@ -41,6 +41,10 @@ See `GenBank_Protocol_DRAFT.docx` for the full step-by-step lab protocol, includ
 | `xlsx_to_genbank.py` | Converts a filled template to a full GenBank flat file (.gb) |
 | `GenBank_Protocol_DRAFT.docx` | Step-by-step lab protocol, from filling out the template through submission |
 
+## Example
+
+[`examples/moonfish/`](examples/moonfish/) contains a full worked example on a real, published 69,166-bp phage genome (*Shigella* phage Moonfish, [PQ613263](https://www.ncbi.nlm.nih.gov/nuccore/PQ613263)) — the filled template, TableTurner's generated output, the lab's original hand-typed feature table for comparison, and a full write-up of how the output was validated character-by-character against the original draft and feature-by-feature against the real published NCBI record, including a confidence assessment and an explanation of every discrepancy found.
+
 ## Known limitations
 
 - One sequence record per workbook — for multi-segment genomes, use a separate workbook per segment.
@@ -54,6 +58,10 @@ It turns a spreadsheet *table* into a GenBank feature *table* — and turns the 
 ## Acknowledgments
 
 TableTurner was built to help streamline a real lab workflow: [Dr. Kristin Parent](https://kparentlab.natsci.msu.edu/), Michigan State University, provided the real-world phage genome sequencing/annotation protocol and annotation data this tool was designed around and validated against, including feature-by-feature testing against a real published NCBI record. The tool itself was written by Robert Houston (not a domain scientist), to save a lab member from doing this conversion by hand — and shared publicly in the hope it's useful to anyone else facing the same tedious conversion.
+
+The example dataset in `examples/moonfish/` comes from the real, published genome of *Shigella* phage Moonfish:
+
+> Subramanian S, McGuffin H, Passage R, Dover JA, Parent KN. 2025. Complete genome sequence of *Shigella* phage Moonfish isolated from Mid-Michigan. *Microbiology Resource Announcements* 14(6):e01255-24. https://doi.org/10.1128/mra.01255-24 — [full text (open access)](https://pmc.ncbi.nlm.nih.gov/articles/PMC12160474/)
 
 ## How to cite
 

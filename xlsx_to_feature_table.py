@@ -301,7 +301,17 @@ def main():
         print("Usage: python3 xlsx_to_feature_table.py input.xlsx [output.tbl.txt]")
         sys.exit(1)
     xlsx_path = sys.argv[1]
-    out_path = sys.argv[2] if len(sys.argv) > 2 else re.sub(r"\.xlsx$", ".tbl.txt", xlsx_path)
+    if len(sys.argv) > 2:
+        out_path = sys.argv[2]
+    else:
+        out_path = re.sub(r"\.xlsx$", "", xlsx_path, flags=re.IGNORECASE) + ".tbl.txt"
+        if out_path == xlsx_path + ".tbl.txt":
+            # input didn't end in .xlsx at all — still append rather than reuse the input name
+            out_path = xlsx_path + ".tbl.txt"
+    if out_path == xlsx_path:
+        print(f"ERROR: refusing to overwrite the input file ({xlsx_path}). "
+              f"Pass an explicit output filename: python3 xlsx_to_feature_table.py {xlsx_path} output.tbl.txt")
+        sys.exit(1)
 
     try:
         text, warnings = convert(xlsx_path, out_path)

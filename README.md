@@ -29,7 +29,7 @@ The biochemistry — coordinates, strand, reading frame, translation, start codo
      ```
 
      (Needs `openpyxl`: `pip install openpyxl`.)
-3. Read the warnings the script prints — they flag real issues (missing product on a CDS, coordinates out of range, a translation that came out empty because of a typo'd gene span) rather than being cosmetic noise.
+3. Read the warnings the script prints — they flag real issues (missing product on a CDS, coordinates out of range, a translation that came out empty because of a typo'd gene span) rather than being cosmetic noise. See `TROUBLESHOOTING.md` if anything looks off or a warning/error doesn't make sense.
 4. **Spot-check the output before you trust it — always, on your first few uses,** regardless of whatever ongoing review policy your lab settles on. Confirm the Locus/Sequence Name, organism, and a handful of CDS products/coordinates match what you expect, and see "Verifying the output" in the protocol doc for a fuller checklist.
 5. Upload the feature table to BankIt/WebSub, or keep the .gb file for your own records.
 
@@ -44,6 +44,7 @@ See `GenBank_Protocol_DRAFT.docx` for the full step-by-step lab protocol.
 | `xlsx_to_genbank.py` | Converts a filled template to a full GenBank flat file (.gb) |
 | `GenBank_Protocol_DRAFT.docx` | Step-by-step lab protocol, from filling out the template through submission |
 | `.claude/skills/genbank-converter/` | The bundled Claude skill — loads automatically when using Claude Code/Cowork in this repo folder |
+| `TROUBLESHOOTING.md` | Common errors, warnings, and data-entry gotchas, with fixes |
 
 ## Example
 
@@ -79,6 +80,7 @@ See `CITATION.cff` for a machine-readable version — GitHub's "Cite this reposi
 
 ## Questions / support
 
+- **Hitting an error or a warning you don't understand?** Check `TROUBLESHOOTING.md` first — it covers the common ones with fixes.
 - **Tool bugs, feature requests, anything about how the scripts/template work:** open an issue at [github.com/FeatureConvert/TableTurner/issues](https://github.com/FeatureConvert/TableTurner/issues) — Robert Houston maintains the tool.
 - **Annotation/biology questions** — is this the right product name, should this feature be marked partial, that kind of scientific judgment call, not tool mechanics — that's Dr. Kristin Parent's territory, not the tool maintainer's.
 

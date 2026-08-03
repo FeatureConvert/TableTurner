@@ -68,10 +68,21 @@ def reverse_complement(seq):
     return seq.translate(COMPLEMENT)[::-1]
 
 
-START_CODONS = {"TTG", "CTG", "ATT", "ATC", "ATA", "ATG", "GTG"}  # table 11 alternate starts
+# Alternate start codons that translate as Met when they're the TRUE first
+# codon of a CDS, keyed by transl_table. Table 11 (bacteria/archaea/phage,
+# this tool's default and the one it's validated against) has several;
+# table 1 (standard) officially recognizes only ATG — CTG/TTG show up as
+# alternates in some eukaryotic genomes, but that's organism-specific, not
+# part of the default table, so they're deliberately left out here rather
+# than guessed at. Any table value other than "1" falls back to the table 11
+# set, matching this tool's bacteriophage-focused default.
+START_CODONS_BY_TABLE = {
+    "1": {"ATG"},
+    "11": {"TTG", "CTG", "ATT", "ATC", "ATA", "ATG", "GTG"},
+}
 
 
-def translate_cds(seq_region, codon_start, warnings, label, partial5=False):
+def translate_cds(seq_region, codon_start, warnings, label, partial5=False, transl_table="11"):
     """seq_region is already strand-corrected (5'->3' coding sense), uppercase.
 
     Per standard GenBank/NCBI translation convention (and genetic code table 11,
@@ -79,11 +90,14 @@ def translate_cds(seq_region, codon_start, warnings, label, partial5=False):
     translated as Met (M), even when it's an alternate start codon like GTG or
     TTG that would translate as Val/Leu anywhere else in the reading frame. This
     only applies when codon_start == 1 and the CDS is not 5'-partial (a partial
-    CDS's first codon is a mid-gene fragment, not a true start codon)."""
+    CDS's first codon is a mid-gene fragment, not a true start codon). Which
+    codons count as alternate starts depends on transl_table — see
+    START_CODONS_BY_TABLE above."""
     try:
         codon_start = int(codon_start) if codon_start not in (None, "") else 1
     except ValueError:
         codon_start = 1
+    start_codons = START_CODONS_BY_TABLE.get(str(transl_table).strip(), START_CODONS_BY_TABLE["11"])
     trimmed = seq_region[codon_start - 1:]
     protein = []
     for i in range(0, len(trimmed) - 2, 3):
@@ -94,7 +108,7 @@ def translate_cds(seq_region, codon_start, warnings, label, partial5=False):
         protein.append(aa)
     if protein and codon_start == 1 and not partial5:
         first_codon = trimmed[0:3]
-        if first_codon in START_CODONS and protein[0] != "M":
+        if first_codon in start_codons and protein[0] != "M":
             protein[0] = "M"
     if not protein:
         warn(f"{label}: translation came out empty — check start/end/strand/codon_start.", warnings)
@@ -406,7 +420,7 @@ def build_genbank(record, features, seq, warnings):
             gene_feat["note"] = ""
             gene_feat["db_xref"] = ""
             gene_feat["other"] = ""
-            if not feat.get("gene_num"):
+            if feat.get("gene_num") in ("", None):
                 warn(f"Row {feat['row']}: CDS has no Gene # — paired gene feature written without a locus_tag.",
                      warnings)
             expanded.append(gene_feat)
@@ -515,7 +529,8 @@ def build_genbank(record, features, seq, warnings):
 
         if key == "CDS":
             protein = translate_cds(region, feat["codon_start"] or 1, warnings, f"Row {feat['row']} CDS",
-                                     partial5=feat.get("partial5", False))
+                                     partial5=feat.get("partial5", False),
+                                     transl_table=feat["transl_table"] or "11")
             if protein:
                 lines.extend(format_qualifier("translation", protein, is_translation=True))
 
@@ -555,7 +570,14 @@ def main():
         print("Usage: python3 xlsx_to_genbank.py input.xlsx [output.gb]")
         sys.exit(1)
     xlsx_path = sys.argv[1]
-    out_path = sys.argv[2] if len(sys.argv) > 2 else re.sub(r"\.xlsx$", ".gb", xlsx_path)
+    if len(sys.argv) > 2:
+        out_path = sys.argv[2]
+    else:
+        out_path = re.sub(r"\.xlsx$", "", xlsx_path, flags=re.IGNORECASE) + ".gb"
+    if out_path == xlsx_path:
+        print(f"ERROR: refusing to overwrite the input file ({xlsx_path}). "
+              f"Pass an explicit output filename: python3 xlsx_to_genbank.py {xlsx_path} output.gb")
+        sys.exit(1)
 
     try:
         gb_text, warnings = convert(xlsx_path, out_path)

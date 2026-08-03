@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If this tool contributes to your published work, please cite it as below."
+type: software
+title: "TableTurner: Excel-to-GenBank annotation conversion"
+authors:
+  - family-names: Houston
+    given-names: Robert
+repository-code: "https://github.com/FeatureConvert/TableTurner"
+url: "https://github.com/FeatureConvert/TableTurner"
+license: MIT
+version: 1.0.0
+date-released: "2026-08-03"
+abstract: >-
+  TableTurner converts a filled-in Excel annotation template into either
+  NCBI's 5-column tab-delimited feature table (for BankIt/WebSub submission)
+  or a complete GenBank flat file (.gb), automating the manual transcription
+  step in phage/small-genome sequencing and annotation workflows.

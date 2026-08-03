@@ -50,3 +50,17 @@ See `GenBank_Protocol_DRAFT.docx` for the full step-by-step lab protocol, includ
 ## Why "TableTurner"
 
 It turns a spreadsheet *table* into a GenBank feature *table* — and turns the tables on the hours of manual formatting that used to take.
+
+## How to cite
+
+TableTurner is free to use under the MIT license (see below) — no legal obligation to cite it. But if it saved you time on an annotation that made it into a publication, an acknowledgment or citation is genuinely appreciated and helps justify continued work on tools like this. Suggested citation:
+
+```
+Houston, R. TableTurner: Excel-to-GenBank annotation conversion. https://github.com/FeatureConvert/TableTurner
+```
+
+See `CITATION.cff` for a machine-readable version — GitHub's "Cite this repository" button (top right of the repo page) will generate APA/BibTeX formats from it automatically.
+
+## License
+
+MIT — see `LICENSE`. Free to use, modify, and redistribute, including commercially; just keep the copyright notice.

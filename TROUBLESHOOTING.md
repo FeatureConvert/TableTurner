@@ -51,7 +51,7 @@ Both scripts auto-generate the paired `gene` feature for each CDS row. Adding yo
 The template defaults to `transl_table=11` (bacteria/archaea/phage), which recognizes TTG, CTG, ATT, ATC, ATA, ATG, and GTG as valid alternate start codons that translate as Met. `transl_table=1` (standard code) only recognizes ATG. If you're using a different genetic code table and a gene's translation looks wrong at the first residue, this is likely why — open a GitHub issue if you need another table's start codons supported.
 
 **locus_tag naming (`Name_gp1` vs `Name_1`) doesn't match the published NCBI record**
-This is expected, not a bug — see `examples/moonfish/README.md` for a full explanation. NCBI's own curation sometimes reformats locus_tags during submission processing; the tool preserves whatever convention you're already using in your source data rather than silently changing it.
+This is expected, not a bug — see `examples/moonfish/README.md` for a full explanation. NCBI's own curation sometimes reformats locus_tags during submission processing; the tool preserves whatever convention you're already using in your source data rather than silently changing it. This is a confirmed design decision (the `Name_gp{N}` default matches this lab's own convention), not something the tool will auto-detect or switch for you — if your lab uses a different locus_tag convention, you'll need to adjust the generated output manually (or your source data's Gene # / naming) to match.
 
 **CDS count in your draft doesn't match the eventually-published record**
 Also expected — NCBI curation can merge or remove features between submission and publication (documented with a real example in `examples/moonfish/README.md`).
@@ -60,4 +60,4 @@ Also expected — NCBI curation can merge or remove features between submission 
 
 - **Tool bugs / script errors / anything that looks like a defect in the conversion logic:** open an issue at [github.com/FeatureConvert/TableTurner/issues](https://github.com/FeatureConvert/TableTurner/issues).
 - **"Is this the right way to annotate this feature" / other biology judgment calls:** that's a question for Dr. Kristin Parent, not the tool — see the README's "Questions / support" section.
-- **First few times using the tool:** verify the output yourself regardless of anything else — see "Verifying the output" in `GenBank_Protocol_DRAFT.docx`.
+- **Every time you use the tool:** verify the output yourself before submitting — no second reviewer is required, but the person running the tool is responsible for checking it. See "Verifying the output" in `GenBank_Protocol_DRAFT.docx`.

@@ -1,5 +1,7 @@
 # TableTurner
 
+**Current release: v1.1.0**
+
 Turn a filled-in Excel spreadsheet into a submission-ready GenBank record — no hand-typing a feature table, no wrestling with column spacing, no re-learning the GenBank flat file spec every time you annotate a genome.
 
 ## What it does
@@ -30,7 +32,7 @@ The biochemistry — coordinates, strand, reading frame, translation, start codo
 
      (Needs `openpyxl`: `pip install openpyxl`.)
 3. Read the warnings the script prints — they flag real issues (missing product on a CDS, coordinates out of range, a translation that came out empty because of a typo'd gene span) rather than being cosmetic noise. See `TROUBLESHOOTING.md` if anything looks off or a warning/error doesn't make sense.
-4. **Spot-check the output before you trust it — always, on your first few uses,** regardless of whatever ongoing review policy your lab settles on. Confirm the Locus/Sequence Name, organism, and a handful of CDS products/coordinates match what you expect, and see "Verifying the output" in the protocol doc for a fuller checklist.
+4. **Spot-check the output before you trust it — every time, not just while you're new to it.** The person running the tool is responsible for reviewing its output before submission; no second reviewer is required. Confirm the Locus/Sequence Name, organism, and a handful of CDS products/coordinates match what you expect, and see "Verifying the output" in the protocol doc for a fuller checklist.
 5. Upload the feature table to BankIt/WebSub, or keep the .gb file for your own records.
 
 See `GenBank_Protocol_DRAFT.docx` for the full step-by-step lab protocol.

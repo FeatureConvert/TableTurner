@@ -1,5 +1,7 @@
 # Troubleshooting
 
+**Note: this is beta software (v1.1.0-beta), not yet widely tested.** Validated against one real published genome so far, not across multiple labs or datasets — if you hit something not covered here, it may genuinely be new. See the "Still stuck?" section below.
+
 Common errors, warnings, and gotchas — and what to do about each.
 
 ## Setup errors

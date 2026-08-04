@@ -1,6 +1,6 @@
 # TableTurner
 
-**Current release: v1.1.0**
+**Current release: v1.1.0 (Beta)** — not yet widely tested. Validated end-to-end against one real published genome so far (see Example below); hasn't been run across multiple labs, datasets, or annotation styles yet. Verify your own output carefully, especially early on — see "Verifying the output" in the protocol doc.
 
 Turn a filled-in Excel spreadsheet into a submission-ready GenBank record — no hand-typing a feature table, no wrestling with column spacing, no re-learning the GenBank flat file spec every time you annotate a genome.
 
@@ -54,6 +54,7 @@ See `GenBank_Protocol.docx` for the full step-by-step lab protocol.
 
 ## Known limitations
 
+- **Beta software — not yet widely tested.** Validated feature-by-feature and character-by-character against one real published genome (see Example below), but hasn't been run yet across multiple labs, users, or a wider variety of genomes/annotation styles. Treat every output as something to verify, not something to trust blindly.
 - One sequence record per workbook — for multi-segment genomes, use a separate workbook per segment.
 - One contiguous span per feature row — no spliced/multi-exon (`join()`) locations.
 - Defaults assume `transl_table=11` and `codon_start=1` (bacteria/archaea/phage) — override per row if a feature genuinely needs something else.

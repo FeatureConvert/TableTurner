@@ -77,6 +77,8 @@ def read_sequence_length(wb, warnings):
     bad = set(seq) - IUPAC_NT
     if bad:
         warn(f"Sequence contains unexpected characters: {sorted(bad)}", warnings)
+    if "U" in seq:
+        warn("Sequence contains 'U' (uracil) — verify this is intentional (RNA uses U, DNA uses T).", warnings)
     return len(seq)
 
 
@@ -222,13 +224,21 @@ def build_feature_table(record, features, seq_length, warnings):
                 hi = max(float(feat["start"]), float(feat["end"]))
                 if lo < 1 or hi > seq_length:
                     warn(f"Row {feat['row']}: {key} location {feat['start']}..{feat['end']} is out of range "
-                         f"for a {seq_length}-bp sequence — check this row.", warnings)
+                         f"for a {seq_length}-bp sequence — skipped.", warnings)
+                    continue
             except (TypeError, ValueError):
                 pass
 
         gene_num = feat["gene_num"]
-        locus_tag = f"{name}_gp{int(float(gene_num))}" if gene_num not in ("", None) else None
-        gp_label = f"gp{int(float(gene_num))}" if gene_num not in ("", None) else None
+        locus_tag = None
+        gp_label = None
+        if gene_num not in ("", None):
+            try:
+                n = int(float(gene_num))
+                locus_tag = f"{name}_gp{n}"
+                gp_label = f"gp{n}"
+            except (TypeError, ValueError):
+                warn(f"Row {feat['row']}: Gene # '{gene_num}' is not numeric — locus_tag omitted.", warnings)
 
         if key == "CDS":
             # paired gene feature first

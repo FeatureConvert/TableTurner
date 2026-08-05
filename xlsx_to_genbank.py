@@ -100,8 +100,10 @@ def translate_cds(seq_region, codon_start, warnings, label, partial5=False, tran
     start_codons = START_CODONS_BY_TABLE.get(str(transl_table).strip(), START_CODONS_BY_TABLE["11"])
     trimmed = seq_region[codon_start - 1:]
     protein = []
-    for i in range(0, len(trimmed) - 2, 3):
+    for i in range(0, len(trimmed), 3):
         codon = trimmed[i:i + 3]
+        if len(codon) < 3:
+            break
         aa = CODON_TABLE.get(codon, "X")
         if aa == "*":
             break
@@ -111,7 +113,7 @@ def translate_cds(seq_region, codon_start, warnings, label, partial5=False, tran
         if first_codon in start_codons and protein[0] != "M":
             protein[0] = "M"
     if not protein:
-        warn(f"{label}: translation came out empty — check start/end/strand/codon_start.", warnings)
+        warn(f"{label}: translation resulted in empty or stop-only sequence — verify codon_start, strand orientation, and start/end coordinates.", warnings)
     return "".join(protein)
 
 
@@ -350,6 +352,8 @@ def read_sequence_sheet(wb, warnings):
     bad = set(seq) - IUPAC_NT
     if bad:
         warn(f"Sequence contains unexpected characters (kept as-is): {sorted(bad)}", warnings)
+    if "U" in seq:
+        warn("Sequence contains 'U' (uracil) — verify this is intentional (RNA uses U, DNA uses T).", warnings)
     if not seq:
         raise ConversionError("The 'Sequence' sheet has no valid nucleotide characters.")
     return seq
@@ -443,7 +447,8 @@ def build_genbank(record, features, seq, warnings):
             continue
         if start < 1 or end > length or start > end:
             warn(f"Row {feat['row']}: {key} location {start}..{end} is out of range for a "
-                 f"{length}-bp sequence, or Start > End — check this row.", warnings)
+                 f"{length}-bp sequence, or Start > End — skipped.", warnings)
+            continue
 
         loc = build_location(start, end, feat["strand"], feat["partial5"], feat["partial3"])
         lines.extend(format_feature_line(key, loc))
@@ -461,6 +466,7 @@ def build_genbank(record, features, seq, warnings):
                 locus_tag = f"{name}_gp{n}"
                 gp_label = f"gp{n}"
             except (TypeError, ValueError):
+                warn(f"Row {feat['row']}: Gene # '{gene_num}' is not numeric — locus_tag omitted.", warnings)
                 locus_tag = None
 
         quals = []

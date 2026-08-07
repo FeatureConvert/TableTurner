@@ -37,13 +37,36 @@ Notes on conventions implemented, matching this lab's protocol:
   - Qualifier lines always use real tabs (three leading tabs, then key, tab,
     value) and blank/empty qualifiers are simply omitted, so the output
     doesn't carry the stray blank-line and missing-tab artifacts sometimes
-    seen in hand-edited feature tables.
+    seen in hand-edited feature tables. Embedded tabs/newlines inside a
+    value are sanitized (collapsed to a space, with a warning) since this
+    format is itself tab/newline-delimited.
+
+v3 additions (for viruses beyond simple non-spliced dsDNA phage genomes):
+  - mat_peptide feature key, for polyprotein viruses (coronaviruses,
+    flaviviruses, picornaviruses) where one CDS is cleaved into multiple
+    mature peptides. mat_peptide rows are independent — no paired gene
+    feature, no locus_tag — matching how these are annotated in real
+    published records.
+  - Exon Group column: rows sharing the same Feature Key + the same
+    non-blank Exon Group value are merged into one multi-interval feature,
+    in the order they appear in the sheet, for spliced genes in eukaryotic
+    DNA viruses (herpesviruses, adenoviruses, baculoviruses). Only the
+    first row of a group needs Product/Gene #/Note/etc.; later rows only
+    need Start/End. The feature-table format represents this as multiple
+    "<start>\t<end>" coordinate lines followed by one set of qualifier
+    lines — no join()/complement() keywords (those are flat-file-only
+    syntax; this format encodes strand per coordinate-pair line, same as
+    the existing single-interval convention). A spliced CDS's paired gene
+    line still spans only the outer bounds (first exon's start to last
+    exon's end) as a single interval, matching real annotation practice
+    (gene features cover introns as one span; only CDS/mRNA get per-exon
+    lines).
 """
 import sys
 import re
 from openpyxl import load_workbook
 
-VALID_FEATURE_KEYS = {"gene", "CDS", "tRNA", "rRNA", "misc_feature"}
+VALID_FEATURE_KEYS = {"gene", "CDS", "tRNA", "rRNA", "misc_feature", "mat_peptide"}
 IUPAC_NT = set("ACGTUNRYSWKMBDHV")
 
 
@@ -77,8 +100,6 @@ def read_sequence_length(wb, warnings):
     bad = set(seq) - IUPAC_NT
     if bad:
         warn(f"Sequence contains unexpected characters: {sorted(bad)}", warnings)
-    if "U" in seq:
-        warn("Sequence contains 'U' (uracil) — verify this is intentional (RNA uses U, DNA uses T).", warnings)
     return len(seq)
 
 
@@ -124,6 +145,7 @@ def read_features(ws):
         "other": find_col("Other Qualifiers (gb only, key=value|key=value)"),
         "partial5": find_col("Partial 5' end (Y/N)"),
         "partial3": find_col("Partial 3' end (Y/N)"),
+        "exon_group": find_col("Exon Group"),
     }
 
     def get(row, key):
@@ -154,8 +176,52 @@ def read_features(ws):
             "other": get(r, "other"),
             "partial5": str(get(r, "partial5") or "N").strip().upper() == "Y",
             "partial3": str(get(r, "partial3") or "N").strip().upper() == "Y",
+            "exon_group": get(r, "exon_group"),
         })
     return features
+
+
+def group_exons(features, warnings):
+    """Merge rows sharing the same Feature Key + the same non-blank Exon
+    Group value into one multi-interval feature, in sheet order. The first
+    row of a group carries all qualifiers; every row in the group
+    contributes one (start, end) interval. Rows with a blank Exon Group are
+    left as single-interval features, unchanged from prior behavior."""
+    grouped = []
+    group_index = {}  # (feature_key, exon_group) -> position in `grouped`
+
+    for feat in features:
+        eg = str(feat.get("exon_group") or "").strip()
+        feat["intervals"] = [(feat["start"], feat["end"])]
+        feat["_exon_rows"] = [feat["row"]]
+        if not eg:
+            grouped.append(feat)
+            continue
+
+        gkey = (feat["feature_key"], eg)
+        if gkey not in group_index:
+            group_index[gkey] = len(grouped)
+            grouped.append(feat)
+        else:
+            head = grouped[group_index[gkey]]
+            try:
+                head_dir = float(head["intervals"][0][0]) <= float(head["intervals"][0][1])
+                this_dir = float(feat["start"]) <= float(feat["end"])
+                if head_dir != this_dir:
+                    warn(f"Row {feat['row']}: Exon Group '{eg}' mixes rows whose Start/End imply "
+                         f"different strands — check this group's coordinates.", warnings)
+            except (TypeError, ValueError):
+                pass
+            head["intervals"].append((feat["start"], feat["end"]))
+            head["_exon_rows"].append(feat["row"])
+            for field, label in (("product", "Product"), ("gene_num", "Gene #"),
+                                  ("note", "Note"), ("other", "Other Qualifiers")):
+                v = feat.get(field, "")
+                if v not in ("", None):
+                    warn(f"Row {feat['row']}: {label} on an Exon Group '{eg}' continuation row is "
+                         f"ignored — only the first row of an Exon Group supplies qualifiers.", warnings)
+
+    return grouped
 
 
 def parse_other_qualifiers(text):
@@ -174,17 +240,63 @@ def parse_other_qualifiers(text):
     return pairs
 
 
-def loc_cols(start, end, partial5, partial3):
+def numeric_str(v):
     try:
-        s = str(int(float(start)))
-        e = str(int(float(end)))
+        return str(int(float(v)))
     except (TypeError, ValueError):
-        return None, None
+        return None
+
+
+def build_decorated_intervals(intervals, partial5, partial3, warnings, row_label):
+    """Convert raw (start, end) pairs to decorated (s, e) string pairs.
+    Partial markers ('<' / '>') are applied positionally — column 1 of the
+    FIRST interval gets '<', column 2 of the LAST interval gets '>' —
+    matching this format's existing single-interval convention (no
+    strand-based flipping; that nuance is specific to true INSDC join()
+    syntax in the flat-file converter). Returns None if any interval fails
+    to parse as numeric."""
+    decorated = []
+    for s_raw, e_raw in intervals:
+        s = numeric_str(s_raw)
+        e = numeric_str(e_raw)
+        if s is None or e is None:
+            warn(f"Row(s) {row_label}: non-numeric Start/End — feature skipped.", warnings)
+            return None
+        decorated.append([s, e])
     if partial5:
-        s = "<" + s
+        decorated[0][0] = "<" + decorated[0][0]
     if partial3:
-        e = ">" + e
-    return s, e
+        decorated[-1][1] = ">" + decorated[-1][1]
+    return decorated
+
+
+def check_ranges(intervals, seq_length, warnings, row_label, key):
+    if seq_length is None:
+        return
+    for s_raw, e_raw in intervals:
+        try:
+            lo = min(float(s_raw), float(e_raw))
+            hi = max(float(s_raw), float(e_raw))
+            if lo < 1 or hi > seq_length:
+                warn(f"Row(s) {row_label}: {key} location {s_raw}..{e_raw} is out of range "
+                     f"for a {seq_length}-bp sequence — check this row.", warnings)
+        except (TypeError, ValueError):
+            pass
+
+
+def outer_bounds(intervals):
+    """Overall min/max across every coordinate in a (possibly multi-interval)
+    feature, used for the single-span paired gene feature of a spliced CDS."""
+    coords = []
+    for s_raw, e_raw in intervals:
+        try:
+            coords.append(float(s_raw))
+            coords.append(float(e_raw))
+        except (TypeError, ValueError):
+            return None, None
+    if not coords:
+        return None, None
+    return min(coords), max(coords)
 
 
 def qual_line(key, value=None, warnings=None, row=None):
@@ -214,43 +326,43 @@ def build_feature_table(record, features, seq_length, warnings):
         def ql(k, v=None, _row=feat["row"]):
             return qual_line(k, v, warnings, _row)
 
-        s, e = loc_cols(feat["start"], feat["end"], feat["partial5"], feat["partial3"])
-        if s is None:
-            warn(f"Row {feat['row']}: {key} has non-numeric Start/End — skipped.", warnings)
+        row_label = "+".join(str(r) for r in feat["_exon_rows"])
+        intervals = feat["intervals"]
+
+        decorated = build_decorated_intervals(intervals, feat["partial5"], feat["partial3"],
+                                               warnings, row_label)
+        if decorated is None:
             continue
-        if seq_length is not None:
-            try:
-                lo = min(float(feat["start"]), float(feat["end"]))
-                hi = max(float(feat["start"]), float(feat["end"]))
-                if lo < 1 or hi > seq_length:
-                    warn(f"Row {feat['row']}: {key} location {feat['start']}..{feat['end']} is out of range "
-                         f"for a {seq_length}-bp sequence — skipped.", warnings)
-                    continue
-            except (TypeError, ValueError):
-                pass
+        check_ranges(intervals, seq_length, warnings, row_label, key)
 
         gene_num = feat["gene_num"]
-        locus_tag = None
-        gp_label = None
-        if gene_num not in ("", None):
-            try:
-                n = int(float(gene_num))
-                locus_tag = f"{name}_gp{n}"
-                gp_label = f"gp{n}"
-            except (TypeError, ValueError):
-                warn(f"Row {feat['row']}: Gene # '{gene_num}' is not numeric — locus_tag omitted.", warnings)
+        locus_tag = f"{name}_gp{int(float(gene_num))}" if gene_num not in ("", None) else None
+        gp_label = f"gp{int(float(gene_num))}" if gene_num not in ("", None) else None
 
         if key == "CDS":
-            # paired gene feature first
-            lines.append(f"{s}\t{e}\tgene")
-            if locus_tag:
-                lines.append(ql("locus_tag", locus_tag))
+            # paired gene feature first — single span covering the outer
+            # bounds only, even if the CDS itself is spliced across exons.
+            gmin, gmax = outer_bounds(intervals)
+            if gmin is None:
+                warn(f"Row(s) {row_label}: could not compute gene span — gene feature skipped.", warnings)
             else:
-                warn(f"Row {feat['row']}: CDS has no Gene # — gene feature written without a locus_tag.", warnings)
+                g_s, g_e = numeric_str(gmin), numeric_str(gmax)
+                if feat["partial5"]:
+                    g_s = "<" + g_s
+                if feat["partial3"]:
+                    g_e = ">" + g_e
+                lines.append(f"{g_s}\t{g_e}\tgene")
+                if locus_tag:
+                    lines.append(ql("locus_tag", locus_tag))
+                else:
+                    warn(f"Row(s) {row_label}: CDS has no Gene # — gene feature written without a locus_tag.",
+                         warnings)
 
-            lines.append(f"{s}\t{e}\tCDS")
+            lines.append(f"{decorated[0][0]}\t{decorated[0][1]}\tCDS")
+            for s, e in decorated[1:]:
+                lines.append(f"{s}\t{e}")
             if not feat["product"]:
-                warn(f"Row {feat['row']}: CDS has no Product — BankIt requires one.", warnings)
+                warn(f"Row(s) {row_label}: CDS has no Product — BankIt requires one.", warnings)
             lines.append(ql("product", feat["product"] or "hypothetical protein"))
             if gp_label:
                 lines.append(ql("product", gp_label))
@@ -264,7 +376,9 @@ def build_feature_table(record, features, seq_length, warnings):
                 lines.append(ql(k, v))
 
         elif key == "gene":
-            lines.append(f"{s}\t{e}\tgene")
+            lines.append(f"{decorated[0][0]}\t{decorated[0][1]}\tgene")
+            for s, e in decorated[1:]:
+                lines.append(f"{s}\t{e}")
             if locus_tag:
                 lines.append(ql("locus_tag", locus_tag))
             if feat["note"]:
@@ -272,12 +386,15 @@ def build_feature_table(record, features, seq_length, warnings):
             for k, v in parse_other_qualifiers(feat["other"]):
                 lines.append(ql(k, v))
 
-        else:  # tRNA, rRNA, misc_feature
-            lines.append(f"{s}\t{e}\t{key}")
+        else:  # tRNA, rRNA, misc_feature, mat_peptide
+            lines.append(f"{decorated[0][0]}\t{decorated[0][1]}\t{key}")
+            for s, e in decorated[1:]:
+                lines.append(f"{s}\t{e}")
             if feat["product"]:
                 lines.append(ql("product", feat["product"]))
-            elif key in ("tRNA", "rRNA"):
-                warn(f"Row {feat['row']}: {key} has no Product — recommended (e.g. \"tRNA-Ile\").", warnings)
+            elif key in ("tRNA", "rRNA", "mat_peptide"):
+                warn(f"Row(s) {row_label}: {key} has no Product — recommended "
+                     f"(required by NCBI for mat_peptide).", warnings)
             if feat["note"]:
                 lines.append(ql("note", feat["note"]))
             for k, v in parse_other_qualifiers(feat["other"]):
@@ -295,7 +412,8 @@ def convert(xlsx_path, out_path):
         raise ConversionError("Workbook has no 'Features' sheet.")
 
     record = read_record_info(wb["Record Info"])
-    features = read_features(wb["Features"])
+    raw_features = read_features(wb["Features"])
+    features = group_exons(raw_features, warnings)
     seq_length = read_sequence_length(wb, warnings)
 
     text = build_feature_table(record, features, seq_length, warnings)
@@ -311,17 +429,7 @@ def main():
         print("Usage: python3 xlsx_to_feature_table.py input.xlsx [output.tbl.txt]")
         sys.exit(1)
     xlsx_path = sys.argv[1]
-    if len(sys.argv) > 2:
-        out_path = sys.argv[2]
-    else:
-        out_path = re.sub(r"\.xlsx$", "", xlsx_path, flags=re.IGNORECASE) + ".tbl.txt"
-        if out_path == xlsx_path + ".tbl.txt":
-            # input didn't end in .xlsx at all — still append rather than reuse the input name
-            out_path = xlsx_path + ".tbl.txt"
-    if out_path == xlsx_path:
-        print(f"ERROR: refusing to overwrite the input file ({xlsx_path}). "
-              f"Pass an explicit output filename: python3 xlsx_to_feature_table.py {xlsx_path} output.tbl.txt")
-        sys.exit(1)
+    out_path = sys.argv[2] if len(sys.argv) > 2 else re.sub(r"\.xlsx$", ".tbl.txt", xlsx_path)
 
     try:
         text, warnings = convert(xlsx_path, out_path)

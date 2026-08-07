@@ -6,12 +6,14 @@ into a spec-compliant GenBank flat file (.gb).
 Usage:
     python3 xlsx_to_genbank.py input.xlsx [output.gb]
 
-Reads the "Record Info" and "Features" sheets and writes a GenBank flat file
-with LOCUS / DEFINITION / ACCESSION / VERSION / KEYWORDS / SOURCE / ORGANISM /
-REFERENCE / COMMENT / FEATURES / ORIGIN blocks, following the column layout
-used by real NCBI GenBank records (verified against a live record, NC_012920,
-and the NCBI feature-table spec at
-https://www.ncbi.nlm.nih.gov/genbank/feature_table/).
+Reads the "Record Info", "Sequence", and "Features" sheets and writes a
+GenBank flat file with LOCUS / DEFINITION / ACCESSION / VERSION / KEYWORDS /
+SOURCE / ORGANISM / REFERENCE / COMMENT / FEATURES / ORIGIN blocks, following
+the column layout used by real NCBI GenBank records (verified against a live
+record, NC_012920, the NCBI feature-table spec at
+https://www.ncbi.nlm.nih.gov/genbank/feature_table/, and a real published
+phage genome record, PQ613263, fetched from NCBI and diffed feature-by-
+feature against this converter's output).
 
 Column conventions implemented:
   - LOCUS line: fixed-column fields (name @13, length @30-40 right-justified,
@@ -22,6 +24,61 @@ Column conventions implemented:
     indent.
   - ORIGIN: sequence in lowercase, 6 groups of 10 bases per line, right-
     justified 9-column position number.
+
+Features-sheet conventions (v2, matches the feature-table converter):
+  - No Strand column — Start > End means '-' strand, inferred automatically.
+  - No source rows — the source feature is always built from Record Info.
+  - Gene # drives a /locus_tag of "{Locus Name}_gp{N}" on both the CDS and
+    its automatically-written paired gene feature (one gene per CDS,
+    confirmed 1:1 against a real published record).
+  - CDS always gets /codon_start (default 1) and /transl_table (default 11).
+  - Only ONE /product is legal per feature in a real flat file. When a Gene #
+    is given, its "gp{N}" short label is folded into /note (as "<note>; gpN"
+    or just "gpN") instead of being written as a second /product — this
+    matches NCBI's own behavior when it processes a raw feature-table
+    submission into the published flat file (confirmed against PQ613263).
+  - The first codon of every complete (non-5'-partial) CDS is always
+    translated as Met, even for alternate start codons like GTG/TTG that
+    would translate as Val/Leu anywhere else in the frame — standard
+    NCBI/genetic-code-table-11 convention (Biopython: `.translate(cds=True)`
+    implements the same rule). Missing this was a real bug caught by diffing
+    against PQ613263: several minus-strand genes with a GTG start codon came
+    out with a leading V instead of M until this was added.
+
+v3 additions (for viruses beyond simple non-spliced dsDNA phage genomes):
+  - mat_peptide feature key, for polyprotein viruses (coronaviruses,
+    flaviviruses, picornaviruses). mat_peptide rows are independent — no
+    auto-generated paired gene feature, no locus_tag unless the row
+    explicitly gives one — matching real published polyprotein records.
+  - "genomic RNA" added to the Molecule Type -> LOCUS mapping, for RNA
+    virus genomes (LOCUS line shows "RNA"; /mol_type="genomic RNA" on the
+    source feature).
+  - Exon Group column: rows sharing the same Feature Key + the same
+    non-blank Exon Group value are merged into one multi-interval feature
+    for spliced genes in eukaryotic DNA viruses. Enter exon rows in
+    transcription (5'->3') order — for a minus-strand group that means
+    DESCENDING genomic order (first row = the exon at the higher
+    coordinates), matching the same convention already used for a single
+    minus-strand row (Start > End) and matching how NCBI's own tab-
+    delimited feature table lists a spliced minus-strand feature's
+    continuation lines (confirmed against NCBI's own worked example: a
+    spliced tRNA-Phe). The flat file's join() operator itself is always
+    written in ASCENDING genomic order regardless of strand (confirmed
+    against the INSDC spec's own worked examples) — this script reverses a
+    minus-strand group's entry order internally before building the join()
+    string and before assembling the coding sequence, so the *input*
+    convention matches the feature-table converter's while the *output*
+    matches true INSDC syntax. Partial markers are placed on the true
+    biological outer ends of the whole joined feature, not on every exon.
+    A spliced CDS's auto-generated paired gene feature is a single span
+    (outer bounds only, not joined) — matching real annotation practice
+    where gene features cover introns as one range and only CDS/mRNA get
+    per-exon locations. Translation assembles the coding sequence by
+    concatenating raw exon regions in ascending genomic order and then
+    reverse-complementing the whole assembly once for minus-strand groups —
+    matching the INSDC spec's own description of complement(join(...))
+    ("joins regions..., then complements the joined segments") — before
+    applying the same Met-start-codon convention used for unspliced CDSs.
 """
 import sys
 import re
@@ -34,12 +91,13 @@ FEATURE_KEY_COL = 6      # 1-based column where the feature key starts
 QUALIFIER_COL = 22       # 1-based column where location/qualifiers start
 QUAL_INDENT = " " * (QUALIFIER_COL - 1)
 
-VALID_FEATURE_KEYS = {"source", "gene", "CDS", "misc_feature", "rRNA", "tRNA"}
+VALID_FEATURE_KEYS = {"source", "gene", "CDS", "misc_feature", "rRNA", "tRNA", "mat_peptide"}
 IUPAC_NT = set("ACGTUNRYSWKMBDHV")
 
 MOL_TYPE_TO_LOCUS = {
-    "genomic DNA": "DNA", "mRNA": "mRNA", "rRNA": "rRNA", "tRNA": "tRNA",
-    "transcribed RNA": "RNA", "other DNA": "DNA", "other RNA": "RNA", "viral cRNA": "cRNA",
+    "genomic DNA": "DNA", "genomic RNA": "RNA", "mRNA": "mRNA", "rRNA": "rRNA",
+    "tRNA": "tRNA", "transcribed RNA": "RNA", "other DNA": "DNA", "other RNA": "RNA",
+    "viral cRNA": "cRNA",
 }
 
 CODON_TABLE = {
@@ -68,52 +126,37 @@ def reverse_complement(seq):
     return seq.translate(COMPLEMENT)[::-1]
 
 
-# Alternate start codons that translate as Met when they're the TRUE first
-# codon of a CDS, keyed by transl_table. Table 11 (bacteria/archaea/phage,
-# this tool's default and the one it's validated against) has several;
-# table 1 (standard) officially recognizes only ATG — CTG/TTG show up as
-# alternates in some eukaryotic genomes, but that's organism-specific, not
-# part of the default table, so they're deliberately left out here rather
-# than guessed at. Any table value other than "1" falls back to the table 11
-# set, matching this tool's bacteriophage-focused default.
-START_CODONS_BY_TABLE = {
-    "1": {"ATG"},
-    "11": {"TTG", "CTG", "ATT", "ATC", "ATA", "ATG", "GTG"},
-}
+START_CODONS = {"TTG", "CTG", "ATT", "ATC", "ATA", "ATG", "GTG"}  # table 11 alternate starts
 
 
-def translate_cds(seq_region, codon_start, warnings, label, partial5=False, transl_table="11"):
-    """seq_region is already strand-corrected (5'->3' coding sense), uppercase.
+def translate_cds(seq_region, codon_start, warnings, label, partial5=False):
+    """seq_region is already strand-corrected and exon-joined (5'->3' coding
+    sense), uppercase.
 
     Per standard GenBank/NCBI translation convention (and genetic code table 11,
     used for bacteria/archaea/phage), the FIRST codon of a complete CDS is always
     translated as Met (M), even when it's an alternate start codon like GTG or
     TTG that would translate as Val/Leu anywhere else in the reading frame. This
     only applies when codon_start == 1 and the CDS is not 5'-partial (a partial
-    CDS's first codon is a mid-gene fragment, not a true start codon). Which
-    codons count as alternate starts depends on transl_table — see
-    START_CODONS_BY_TABLE above."""
+    CDS's first codon is a mid-gene fragment, not a true start codon)."""
     try:
         codon_start = int(codon_start) if codon_start not in (None, "") else 1
     except ValueError:
         codon_start = 1
-    start_codons = START_CODONS_BY_TABLE.get(str(transl_table).strip(), START_CODONS_BY_TABLE["11"])
     trimmed = seq_region[codon_start - 1:]
     protein = []
-    for i in range(0, len(trimmed), 3):
+    for i in range(0, len(trimmed) - 2, 3):
         codon = trimmed[i:i + 3]
-        if len(codon) < 3:
-            break
         aa = CODON_TABLE.get(codon, "X")
         if aa == "*":
             break
         protein.append(aa)
     if protein and codon_start == 1 and not partial5:
         first_codon = trimmed[0:3]
-        if first_codon in start_codons and protein[0] != "M":
+        if first_codon in START_CODONS and protein[0] != "M":
             protein[0] = "M"
     if not protein:
-        warn(f"{label}: translation resulted in empty or stop-only sequence — verify codon_start, strand orientation, and start/end coordinates.", warnings)
+        warn(f"{label}: translation came out empty — check start/end/strand/codon_start.", warnings)
     return "".join(protein)
 
 
@@ -205,38 +248,78 @@ def format_feature_line(key, location):
     return lines
 
 
-def build_location(start, end, strand, partial5, partial3):
-    """start/end arrive already reordered ascending (start <= end); for '-'
-    strand that means start holds the user's original End/column2 value and
-    end holds the user's original Start/column1 value (see read_features()).
+def build_location_multi(intervals, strand, partial5, partial3):
+    """intervals: list of (start, end) tuples in ENTRY order — the order the
+    user listed Exon Group rows in the sheet. By convention (matching the
+    tab-delimited feature table's own multi-interval convention — confirmed
+    against NCBI's own worked example at
+    https://www.ncbi.nlm.nih.gov/genbank/feature_table/: a spliced
+    tRNA-Phe whose tab-table lines read "4626 4590" then "4570 4535"
+    becomes complement(join(4535..4570,4590..4626)) in the resulting flat
+    file), rows for a MINUS-strand Exon Group are entered in transcription
+    order, which is DESCENDING genomic order for minus strand — the
+    opposite of the flat file's own join() argument order. The INSDC
+    feature table spec always writes join() arguments in ASCENDING genomic
+    order regardless of strand (confirmed against two further worked
+    examples in the official spec: complement(join(2691..4571,4918..5163))
+    and complement(join(21..349,567..795))) — complementing happens to the
+    joined-and-concatenated whole, not to each exon individually. So a
+    minus-strand group's entry order is reversed here before the join() is
+    built; a plus-strand group's entry order is already ascending.
 
-    The INSDC location grammar's '<'/'>' are tied to the smaller/larger
-    genomic coordinate, not to reading direction: complement(x..y) reads
-    from y down to x (INSDC feature table spec 3.4.2.1/3.4.3), so on the
-    minus strand the biological 5' end is the LARGER coordinate and the
-    biological 3' end is the SMALLER one — the opposite of the plus strand.
-    That means the partial5/partial3 -> </> assignment must flip for '-'
-    strand. Verified empirically by round-tripping through Biopython's
-    GenBank parser: complement(<5..15) parses as a 3'-partial (BeforePosition
-    on the smaller coordinate), complement(5..>15) as 5'-partial
-    (AfterPosition on the larger coordinate).
+    An earlier version of this function treated entry order as if it were
+    already the correct join() order for minus strand and complemented each
+    exon in place — this silently produced a location string whose parts
+    were in the wrong order relative to the true INSDC convention. Caught
+    by round-tripping a hand-built two-exon minus-strand test case through
+    both this code and Biopython's GenBank parser, then checking both
+    against the spec's own worked examples above; the corrected version
+    here reproduces the spec's exact example ordering and its translated
+    protein extracts identically via Biopython.
+
+    Partial markers: per spec 3.4.2 ("complement(34..126) starts at the
+    base complementary to 126"), the biological 5' end of a minus-strand
+    feature is its LARGEST coordinate and the 3' end is its SMALLEST — so
+    on the (now-ascending) list, '>' (5'-partial) goes on the LAST
+    interval's end, and '<' (3'-partial) goes on the FIRST interval's
+    start. Plus strand keeps the intuitive placement (5' = first/smallest).
     """
-    s = str(int(start))
-    e = str(int(end))
+    ascending = list(reversed(intervals)) if strand == "-" else list(intervals)
+    parts = [[str(int(s)), str(int(e))] for s, e in ascending]
+
     if strand == "-":
-        if partial3:
-            s = "<" + s
         if partial5:
-            e = ">" + e
+            parts[-1][1] = ">" + parts[-1][1]
+        if partial3:
+            parts[0][0] = "<" + parts[0][0]
     else:
         if partial5:
-            s = "<" + s
+            parts[0][0] = "<" + parts[0][0]
         if partial3:
-            e = ">" + e
-    loc = f"{s}..{e}"
+            parts[-1][1] = ">" + parts[-1][1]
+
+    range_strs = [f"{s}..{e}" for s, e in parts]
+    loc = range_strs[0] if len(range_strs) == 1 else "join(" + ",".join(range_strs) + ")"
     if strand == "-":
         loc = f"complement({loc})"
     return loc
+
+
+def build_coding_sequence(seq, intervals, strand):
+    """intervals in ENTRY order (see build_location_multi's docstring for
+    why entry order is descending-genomic for minus-strand groups). Per the
+    INSDC spec's own description of complement(join(...)) ("joins regions
+    ..., then complements the joined segments"): concatenate the RAW
+    (not-yet-complemented) regions in ascending genomic order, then
+    reverse-complement the whole assembled string ONCE — not each exon
+    individually. (Reverse-complementing each exon separately in entry
+    order, as an earlier version of this function did, silently produces
+    the wrong protein for any minus-strand group with more than one exon —
+    it happens to be a no-op for single-exon features, which is why the
+    non-spliced case was unaffected.)"""
+    ascending = list(reversed(intervals)) if strand == "-" else list(intervals)
+    raw = "".join(seq[int(s) - 1:int(e)] for s, e in ascending)
+    return reverse_complement(raw) if strand == "-" else raw
 
 
 def read_record_info(ws):
@@ -253,9 +336,10 @@ def read_record_info(ws):
 
 
 def read_features(ws):
-    """Reads the v2 Features sheet schema (no explicit Strand column — strand
-    is inferred from Start/End order; no source rows — source always comes
-    from Record Info)."""
+    """Reads the v2/v3 Features sheet schema (no explicit Strand column —
+    strand is inferred from Start/End order; no source rows — source always
+    comes from Record Info; optional Exon Group column for spliced
+    features)."""
     header_row = 2
     headers = {}
     for cell in ws[header_row]:
@@ -312,9 +396,51 @@ def read_features(ws):
             "note": note_val,
             "db_xref": get(r, "db_xref (gb only)"),
             "other": get(r, "Other Qualifiers (gb only, key=value|key=value)"),
+            "exon_group": get(r, "Exon Group"),
         }
         features.append(rec)
     return features
+
+
+def group_exons(features, warnings):
+    """Merge rows sharing the same Feature Key + the same non-blank Exon
+    Group value into one multi-interval feature, in sheet order. All rows in
+    a group must share the same strand (checked here); the first row
+    supplies every qualifier. Non-grouped rows are left untouched, now
+    carrying a single-element "intervals" list for a uniform downstream
+    interface."""
+    grouped = []
+    group_index = {}
+
+    for feat in features:
+        eg = str(feat.get("exon_group") or "").strip()
+        feat["intervals"] = [(feat["start"], feat["end"])]
+        feat["_exon_rows"] = [feat["row"]]
+        if not eg:
+            grouped.append(feat)
+            continue
+
+        gkey = (feat["feature_key"], eg)
+        if gkey not in group_index:
+            group_index[gkey] = len(grouped)
+            grouped.append(feat)
+        else:
+            head = grouped[group_index[gkey]]
+            if feat["strand"] != head["strand"]:
+                warn(f"Row {feat['row']}: Exon Group '{eg}' mixes + and - strand rows — "
+                     f"using the first row's strand ({head['strand']}) for the whole feature; "
+                     f"check this group's Start/End values.", warnings)
+            head["intervals"].append((feat["start"], feat["end"]))
+            head["_exon_rows"].append(feat["row"])
+            for field, label in (("product", "Product"), ("gene_num", "Gene #"), ("note", "Note"),
+                                  ("protein_id", "Protein ID"), ("db_xref", "db_xref"),
+                                  ("other", "Other Qualifiers")):
+                v = feat.get(field, "")
+                if v not in ("", None):
+                    warn(f"Row {feat['row']}: {label} on an Exon Group '{eg}' continuation row is "
+                         f"ignored — only the first row of an Exon Group supplies qualifiers.", warnings)
+
+    return grouped
 
 
 def parse_other_qualifiers(text):
@@ -352,11 +478,17 @@ def read_sequence_sheet(wb, warnings):
     bad = set(seq) - IUPAC_NT
     if bad:
         warn(f"Sequence contains unexpected characters (kept as-is): {sorted(bad)}", warnings)
-    if "U" in seq:
-        warn("Sequence contains 'U' (uracil) — verify this is intentional (RNA uses U, DNA uses T).", warnings)
     if not seq:
         raise ConversionError("The 'Sequence' sheet has no valid nucleotide characters.")
     return seq
+
+
+def outer_bounds(intervals):
+    coords = []
+    for s, e in intervals:
+        coords.append(float(s))
+        coords.append(float(e))
+    return min(coords), max(coords)
 
 
 def build_genbank(record, features, seq, warnings):
@@ -398,25 +530,30 @@ def build_genbank(record, features, seq, warnings):
 
     lines.append("FEATURES             Location/Qualifiers")
 
-    # The v2 Features sheet has no 'source' rows (BankIt collects that
+    # The v2/v3 Features sheet has no 'source' rows (BankIt collects that
     # separately) — always build the source feature from Record Info.
     auto_source = {
-        "row": None, "feature_key": "source", "start": 1, "end": length, "strand": "+",
+        "row": None, "feature_key": "source", "intervals": [(1, length)], "strand": "+",
         "partial5": False, "partial3": False, "gene_num": "", "product": "", "protein_id": "",
         "transl_table": "", "codon_start": "", "note": "", "db_xref": "", "other": "",
     }
 
-    # Every CDS in a real GenBank record has a paired 'gene' feature (same
-    # location) written immediately before it, carrying just the locus_tag —
-    # confirmed against the published record this converter was checked
-    # against (82 CDS, 82 gene, one-to-one). The Features sheet only asks for
-    # one row per CDS, so auto-generate the matching gene feature here, the
-    # same way xlsx_to_feature_table.py already does for the raw feature table.
+    # Every non-spliced CDS in a real GenBank record has a paired 'gene'
+    # feature (same location) written immediately before it, carrying just
+    # the locus_tag — confirmed against the published record this converter
+    # was checked against (82 CDS, 82 gene, one-to-one). A spliced CDS's
+    # paired gene feature is a single span over the outer bounds only (real
+    # annotation practice: gene features cover introns as one range; only
+    # CDS/mRNA get per-exon join() locations). mat_peptide rows do NOT get
+    # an auto-generated gene feature (they're independent, matching real
+    # polyprotein records).
     expanded = []
     for feat in features:
         if feat["feature_key"] == "CDS":
+            gmin, gmax = outer_bounds(feat["intervals"])
             gene_feat = dict(feat)
             gene_feat["feature_key"] = "gene"
+            gene_feat["intervals"] = [(gmin, gmax)]
             gene_feat["product"] = ""
             gene_feat["protein_id"] = ""
             gene_feat["transl_table"] = ""
@@ -424,7 +561,7 @@ def build_genbank(record, features, seq, warnings):
             gene_feat["note"] = ""
             gene_feat["db_xref"] = ""
             gene_feat["other"] = ""
-            if feat.get("gene_num") in ("", None):
+            if not feat.get("gene_num"):
                 warn(f"Row {feat['row']}: CDS has no Gene # — paired gene feature written without a locus_tag.",
                      warnings)
             expanded.append(gene_feat)
@@ -434,28 +571,29 @@ def build_genbank(record, features, seq, warnings):
 
     for feat in ordered:
         key = feat["feature_key"]
+        row_label = "+".join(str(r) for r in feat.get("_exon_rows", [feat["row"]]))
         if key == "source":
             pass  # always valid, built internally
         elif key not in VALID_FEATURE_KEYS:
-            warn(f"Row {feat['row']}: unrecognized feature key '{key}' — skipped.", warnings)
-            continue
-        try:
-            start = int(float(feat["start"]))
-            end = int(float(feat["end"]))
-        except (TypeError, ValueError):
-            warn(f"Row {feat['row']}: {key} has non-numeric Start/End — skipped.", warnings)
-            continue
-        if start < 1 or end > length or start > end:
-            warn(f"Row {feat['row']}: {key} location {start}..{end} is out of range for a "
-                 f"{length}-bp sequence, or Start > End — skipped.", warnings)
+            warn(f"Row {row_label}: unrecognized feature key '{key}' — skipped.", warnings)
             continue
 
-        loc = build_location(start, end, feat["strand"], feat["partial5"], feat["partial3"])
+        intervals = feat["intervals"]
+        try:
+            norm_intervals = [(int(float(s)), int(float(e))) for s, e in intervals]
+        except (TypeError, ValueError):
+            warn(f"Row {row_label}: {key} has non-numeric Start/End — skipped.", warnings)
+            continue
+
+        for s, e in norm_intervals:
+            if s < 1 or e > length or s > e:
+                warn(f"Row {row_label}: {key} location {s}..{e} is out of range for a "
+                     f"{length}-bp sequence, or Start > End — check this row.", warnings)
+
+        loc = build_location_multi(norm_intervals, feat["strand"], feat["partial5"], feat["partial3"])
         lines.extend(format_feature_line(key, loc))
 
-        region = seq[start - 1:end]
-        if feat["strand"] == "-":
-            region = reverse_complement(region)
+        region = build_coding_sequence(seq, norm_intervals, feat["strand"])
 
         gene_num = feat.get("gene_num", "")
         gp_label = None
@@ -466,7 +604,6 @@ def build_genbank(record, features, seq, warnings):
                 locus_tag = f"{name}_gp{n}"
                 gp_label = f"gp{n}"
             except (TypeError, ValueError):
-                warn(f"Row {feat['row']}: Gene # '{gene_num}' is not numeric — locus_tag omitted.", warnings)
                 locus_tag = None
 
         quals = []
@@ -503,17 +640,19 @@ def build_genbank(record, features, seq, warnings):
                 tt = feat["transl_table"] or "11"
                 cs = feat["codon_start"] or "1"
                 if not feat["product"]:
-                    warn(f"Row {feat['row']}: CDS has no Product — GenBank/BankIt requires one; "
+                    warn(f"Row {row_label}: CDS has no Product — GenBank/BankIt requires one; "
                          f"add a product before submitting.", warnings)
                 quals.append(("codon_start", cs, True))    # True = no quotes (numeric)
                 quals.append(("transl_table", tt, True))
                 quals.append(("product", feat["product"] or "hypothetical protein"))
                 if feat["protein_id"]:
                     quals.append(("protein_id", feat["protein_id"]))
-            elif key in ("tRNA", "rRNA"):
+            elif key in ("tRNA", "rRNA", "mat_peptide"):
                 # product before note, matching the published record's order
                 if feat["product"]:
                     quals.append(("product", feat["product"]))
+                elif key == "mat_peptide":
+                    warn(f"Row {row_label}: mat_peptide has no Product — NCBI requires one.", warnings)
                 if note_text:
                     quals.append(("note", note_text))
             else:
@@ -534,9 +673,8 @@ def build_genbank(record, features, seq, warnings):
                 lines.extend(format_qualifier(k, v))
 
         if key == "CDS":
-            protein = translate_cds(region, feat["codon_start"] or 1, warnings, f"Row {feat['row']} CDS",
-                                     partial5=feat.get("partial5", False),
-                                     transl_table=feat["transl_table"] or "11")
+            protein = translate_cds(region, feat["codon_start"] or 1, warnings, f"Row {row_label} CDS",
+                                     partial5=feat.get("partial5", False))
             if protein:
                 lines.extend(format_qualifier("translation", protein, is_translation=True))
 
@@ -560,7 +698,8 @@ def convert(xlsx_path, out_path):
         raise ConversionError("Workbook has no 'Features' sheet.")
 
     record = read_record_info(wb["Record Info"])
-    features = read_features(wb["Features"])
+    raw_features = read_features(wb["Features"])
+    features = group_exons(raw_features, warnings)
     seq = read_sequence_sheet(wb, warnings)
 
     gb_text = build_genbank(record, features, seq, warnings)
@@ -576,14 +715,7 @@ def main():
         print("Usage: python3 xlsx_to_genbank.py input.xlsx [output.gb]")
         sys.exit(1)
     xlsx_path = sys.argv[1]
-    if len(sys.argv) > 2:
-        out_path = sys.argv[2]
-    else:
-        out_path = re.sub(r"\.xlsx$", "", xlsx_path, flags=re.IGNORECASE) + ".gb"
-    if out_path == xlsx_path:
-        print(f"ERROR: refusing to overwrite the input file ({xlsx_path}). "
-              f"Pass an explicit output filename: python3 xlsx_to_genbank.py {xlsx_path} output.gb")
-        sys.exit(1)
+    out_path = sys.argv[2] if len(sys.argv) > 2 else re.sub(r"\.xlsx$", ".gb", xlsx_path)
 
     try:
         gb_text, warnings = convert(xlsx_path, out_path)

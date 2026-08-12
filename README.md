@@ -59,6 +59,21 @@ See `GenBank_Protocol.docx` for the full step-by-step lab protocol.
 - One contiguous span per feature row - no spliced/multi-exon (`join()`) locations.
 - Defaults assume `transl_table=11` and `codon_start=1` (bacteria/archaea/phage) - override per row if a feature genuinely needs something else.
 
+## Coming soon
+
+A broader feature set was built and mechanically tested (hand-computed expected outputs, cross-checked against Biopython's parser), but is being held back from release until it's reviewed against real annotation data by someone familiar with the underlying biology - not just verified against synthetic test cases:
+
+- Full INSDC feature-key vocabulary - 5'UTR/3'UTR, repeat_region, regulatory, operon, mobile_element, and more, beyond today's gene/CDS/tRNA/rRNA/misc_feature/source set.
+- Polyprotein cleavage products (`mat_peptide`).
+- Spliced eukaryotic/viral genes - `join()`/`complement(join())` locations for multi-exon features.
+- RNA virus genome support.
+- RNA editing and stop-codon readthrough.
+- Native multi-segment genomes in a single workbook (rather than one workbook per segment).
+- Circular-origin-spanning features.
+- A companion codon-usage / tRNA-coverage report script.
+
+If you need one of these for real annotation work now, open an issue at [github.com/FeatureConvert/TableTurner/issues](https://github.com/FeatureConvert/TableTurner/issues) so we can prioritize getting it properly validated.
+
 ## Why "TableTurner"
 
 It turns a spreadsheet *table* into a GenBank feature *table* - and turns the tables on the hours of manual formatting that used to take.

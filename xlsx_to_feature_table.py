@@ -41,33 +41,101 @@ Notes on conventions implemented, matching this lab's protocol:
     value are sanitized (collapsed to a space, with a warning) since this
     format is itself tab/newline-delimited.
 
-v3 additions (for viruses beyond simple non-spliced dsDNA phage genomes):
-  - mat_peptide feature key, for polyprotein viruses (coronaviruses,
-    flaviviruses, picornaviruses) where one CDS is cleaved into multiple
-    mature peptides. mat_peptide rows are independent — no paired gene
-    feature, no locus_tag — matching how these are annotated in real
-    published records.
-  - Exon Group column: rows sharing the same Feature Key + the same
-    non-blank Exon Group value are merged into one multi-interval feature,
-    in the order they appear in the sheet, for spliced genes in eukaryotic
-    DNA viruses (herpesviruses, adenoviruses, baculoviruses). Only the
-    first row of a group needs Product/Gene #/Note/etc.; later rows only
-    need Start/End. The feature-table format represents this as multiple
-    "<start>\t<end>" coordinate lines followed by one set of qualifier
-    lines — no join()/complement() keywords (those are flat-file-only
-    syntax; this format encodes strand per coordinate-pair line, same as
-    the existing single-interval convention). A spliced CDS's paired gene
-    line still spans only the outer bounds (first exon's start to last
-    exon's end) as a single interval, matching real annotation practice
-    (gene features cover introns as one span; only CDS/mRNA get per-exon
-    lines).
+v3 additions: mat_peptide feature key (polyprotein viruses) and an Exon
+Group column for multi-interval (spliced) features — see the v3 changelog
+retained in xlsx_to_genbank.py for the full rationale, which applies to
+both scripts since they share a workbook and the same entry-order
+convention.
+
+v4 additions (broader virus/genome coverage):
+  - VALID_FEATURE_KEYS now covers the full INSDC feature key vocabulary
+    (confirmed against the official spec at
+    https://www.insdc.org/submitting-standards/feature-table/), not just
+    the handful this tool originally special-cased. New keys use a generic
+    handler (Product if given, Note if given, Other Qualifiers) — the same
+    treatment misc_feature always got. Two controlled-vocabulary qualifiers
+    that come up often with these keys are reachable through the existing
+    Other Qualifiers column rather than getting bespoke columns of their
+    own: put `regulatory_class=promoter` (or terminator, ribosome_binding_
+    site, etc.) in Other Qualifiers for a `regulatory` feature, and
+    `rpt_type=long_terminal_repeat` (or inverted, direct, dispersed, etc.)
+    for a `repeat_region` feature (this is also the modern, correct way to
+    annotate retroviral LTRs and viral inverted terminal repeats — INSDC
+    dropped the old standalone "LTR"/"inverted_repeat" keys in favor of
+    repeat_region + rpt_type).
+  - Exception and Transl Except columns, for CDS features only: Exception
+    writes /exception="..." (e.g. "RNA editing" for paramyxovirus P/V/W-
+    style edited transcripts, or "trans-splicing"). Transl Except writes
+    one or more /transl_except=(pos:<location>,aa:<amino_acid>) qualifiers
+    for single-codon deviations from the standard translation — most
+    commonly a stop-codon readthrough (alphaviruses, some plant viruses)
+    or selenocysteine incorporation. You give the codon NUMBER within the
+    CDS (e.g. "142:Trp" for the 142nd codon read through as tryptophan);
+    this script computes the correct genomic location for you. Only
+    supported for non-spliced (single-interval) CDS rows — computing which
+    genomic interval a codon number falls in across an intron boundary is
+    not implemented, so a spliced CDS with Transl Except gets a warning and
+    the qualifier is skipped rather than risking a wrong location.
+  - Native multi-segment workbooks: a workbook may contain repeated sheet
+    triplets named "Record Info (X)"/"Sequence (X)"/"Features (X)" (X = any
+    segment label, e.g. "PB2", "Seg1") for genomes like influenza or
+    bunyaviruses where each segment is its own GenBank record. Detected
+    automatically; a plain "Record Info"/"Sequence"/"Features" workbook
+    (no suffix) is treated as a single segment, unchanged from v3. Output
+    is one combined .tbl file (repeated >Feature blocks, valid per the
+    INSDC spec) plus a companion multi-FASTA (.fsa) of all segments'
+    sequences, matching how BankIt batch submissions actually pair a
+    multi-FASTA with a multi-record feature table.
+  - Plus-strand circular-origin-spanning features: if an Exon Group's
+    intervals are not in strictly ascending order for a plus-strand
+    feature (e.g. a geminivirus Rep gene whose join() wraps from near the
+    end of a circular sequence back to position 1 — join(2004..2195,3..20)
+    is the INSDC spec's own worked example of this), the feature is
+    detected as origin-spanning and its auto-generated paired gene feature
+    is given the same multi-interval join() as the CDS instead of an
+    incorrect single min-to-max span (which would wrongly claim the gene
+    covers the entire genome in between). Minus-strand origin-spanning
+    features are not supported — flagged with a warning instead of guessed
+    at, since the correct INSDC representation there needs the alternate
+    join(complement(...),complement(...)) syntax form, which was not
+    implemented or tested here.
 """
 import sys
 import re
 from openpyxl import load_workbook
 
-VALID_FEATURE_KEYS = {"gene", "CDS", "tRNA", "rRNA", "misc_feature", "mat_peptide"}
+# Full INSDC feature key vocabulary (source: official DDBJ/ENA/GenBank
+# Feature Table Definition, https://www.insdc.org/submitting-standards/feature-table/).
+VALID_FEATURE_KEYS = {
+    "assembly_gap", "C_region", "CDS", "centromere", "D-loop", "D_segment",
+    "exon", "gap", "gene", "iDNA", "intron", "J_segment", "mat_peptide",
+    "misc_binding", "misc_difference", "misc_feature", "misc_recomb",
+    "misc_RNA", "misc_structure", "mobile_element", "modified_base", "mRNA",
+    "ncRNA", "N_region", "old_sequence", "operon", "oriT", "polyA_site",
+    "precursor_RNA", "prim_transcript", "primer_bind", "propeptide",
+    "protein_bind", "regulatory", "repeat_region", "rep_origin", "rRNA",
+    "S_region", "sig_peptide", "stem_loop", "STS", "telomere", "tmRNA",
+    "transit_peptide", "tRNA", "unsure", "V_region", "V_segment",
+    "variation", "3'UTR", "5'UTR",
+    # source is handled as an internal-only feature in xlsx_to_genbank.py;
+    # this script never has source rows (BankIt collects that separately),
+    # but accept it here too rather than reject it outright if present.
+    "source",
+}
+
+# Feature keys where a /product qualifier is expected/recommended, beyond
+# CDS and mat_peptide (which have their own dedicated handling below).
+RNA_PRODUCT_KEYS = {"tRNA", "rRNA", "tmRNA", "ncRNA", "misc_RNA", "precursor_RNA"}
+
 IUPAC_NT = set("ACGTUNRYSWKMBDHV")
+
+AA_1_TO_3 = {
+    "A": "Ala", "C": "Cys", "D": "Asp", "E": "Glu", "F": "Phe", "G": "Gly",
+    "H": "His", "I": "Ile", "K": "Lys", "L": "Leu", "M": "Met", "N": "Asn",
+    "P": "Pro", "Q": "Gln", "R": "Arg", "S": "Ser", "T": "Thr", "V": "Val",
+    "W": "Trp", "Y": "Tyr", "U": "Sec", "O": "Pyl", "*": "TERM",
+}
+KNOWN_AA_3 = set(AA_1_TO_3.values()) | {"Xaa", "OTHER"}
 
 
 class ConversionError(Exception):
@@ -78,15 +146,94 @@ def warn(msg, warnings):
     warnings.append(msg)
 
 
-def read_sequence_length(wb, warnings):
+def normalize_aa(raw, warnings, row_label):
+    """Accepts a 1-letter or 3-letter amino acid code; returns the 3-letter
+    INSDC form for the qualifier value, or None (with a warning) if
+    unrecognized."""
+    if not raw:
+        return None
+    raw = str(raw).strip()
+    if len(raw) == 1:
+        aa3 = AA_1_TO_3.get(raw.upper())
+        if aa3:
+            return aa3
+    else:
+        cap = raw[0].upper() + raw[1:].lower()
+        if cap in KNOWN_AA_3 or raw.upper() == "TERM" or raw.upper() == "OTHER":
+            return "TERM" if raw.upper() == "TERM" else ("OTHER" if raw.upper() == "OTHER" else cap)
+    warn(f"Row(s) {row_label}: unrecognized amino acid code '{raw}' in Transl Except — qualifier skipped.",
+         warnings)
+    return None
+
+
+def parse_transl_except(text, intervals, strand, codon_start, warnings, row_label):
+    """Parses a 'codonNumber:aa[|codonNumber:aa...]' Transl Except cell into
+    a list of ready-to-write '(pos:<loc>,aa:<AA3>)' qualifier value strings.
+    Only supported for a single-interval (non-spliced) CDS — see module
+    docstring.
+
+    Unlike xlsx_to_genbank.py, this script's `intervals` hold the RAW
+    entered Start/End (e.g. (17, 3) for a minus-strand row entered as
+    Start > End) rather than pre-normalized ascending coordinates — they
+    must be normalized to ascending here before doing any position/length
+    arithmetic, or a minus-strand row's length would come out negative and
+    every codon would look "out of range" (caught by testing the minus-
+    strand readthrough case, which triggered exactly that)."""
+    if not text:
+        return []
+    if len(intervals) != 1:
+        warn(f"Row(s) {row_label}: Transl Except is only supported for a non-spliced "
+             f"(single-interval) CDS — skipped.", warnings)
+        return []
+    try:
+        raw_s, raw_e = float(intervals[0][0]), float(intervals[0][1])
+    except (TypeError, ValueError):
+        return []
+    s, e = int(min(raw_s, raw_e)), int(max(raw_s, raw_e))
+    length = e - s + 1
+    try:
+        cs = int(codon_start) if codon_start not in (None, "") else 1
+    except (TypeError, ValueError):
+        cs = 1
+
+    out = []
+    for chunk in str(text).split("|"):
+        chunk = chunk.strip()
+        if not chunk or ":" not in chunk:
+            continue
+        num_str, aa_str = chunk.split(":", 1)
+        try:
+            codon_number = int(float(num_str.strip()))
+        except ValueError:
+            warn(f"Row(s) {row_label}: could not parse codon number in Transl Except entry '{chunk}'.",
+                 warnings)
+            continue
+        offset = (cs - 1) + (codon_number - 1) * 3
+        if offset < 0 or offset + 3 > length:
+            warn(f"Row(s) {row_label}: codon {codon_number} in Transl Except is out of range "
+                 f"for this CDS — skipped.", warnings)
+            continue
+        if strand == "-":
+            g_end = e - offset
+            g_start = g_end - 2
+            loc = f"complement({g_start}..{g_end})"
+        else:
+            g_start = s + offset
+            g_end = g_start + 2
+            loc = f"{g_start}..{g_end}"
+        aa3 = normalize_aa(aa_str, warnings, row_label)
+        if aa3 is None:
+            continue
+        out.append(f"(pos:{loc},aa:{aa3})")
+    return out
+
+
+def read_sequence_text(ws, warnings):
     """Sequence lives on its own sheet (column A, from row 2 down, one chunk
     per cell) because Excel caps a single cell at ~32,767 characters, which
-    real genomes routinely exceed. Only used here to sanity-check feature
-    coordinates; the feature table itself doesn't carry the sequence."""
-    if "Sequence" not in wb.sheetnames:
-        warn("No 'Sequence' sheet found — skipping coordinate range checks.", warnings)
-        return None
-    ws = wb["Sequence"]
+    real genomes routinely exceed. Returns the full concatenated sequence
+    (used for the multi-FASTA companion file on multi-segment workbooks);
+    pass None if the sheet is missing."""
     chunks = []
     for row in ws.iter_rows(min_row=2, min_col=1, max_col=1):
         v = row[0].value
@@ -100,7 +247,19 @@ def read_sequence_length(wb, warnings):
     bad = set(seq) - IUPAC_NT
     if bad:
         warn(f"Sequence contains unexpected characters: {sorted(bad)}", warnings)
-    return len(seq)
+    return seq
+
+
+def read_sequence_length(ws, warnings):
+    seq = read_sequence_text(ws, warnings)
+    return None if seq is None else len(seq)
+
+
+def fasta_wrap(name, seq, width=70):
+    lines = [f">{name}"]
+    for i in range(0, len(seq), width):
+        lines.append(seq[i:i + width])
+    return "\n".join(lines) + "\n"
 
 
 def read_record_info(ws):
@@ -146,6 +305,8 @@ def read_features(ws):
         "partial5": find_col("Partial 5' end (Y/N)"),
         "partial3": find_col("Partial 3' end (Y/N)"),
         "exon_group": find_col("Exon Group"),
+        "exception": find_col("Exception"),
+        "transl_except": find_col("Transl Except"),
     }
 
     def get(row, key):
@@ -177,6 +338,8 @@ def read_features(ws):
             "partial5": str(get(r, "partial5") or "N").strip().upper() == "Y",
             "partial3": str(get(r, "partial3") or "N").strip().upper() == "Y",
             "exon_group": get(r, "exon_group"),
+            "exception": get(r, "exception"),
+            "transl_except": get(r, "transl_except"),
         })
     return features
 
@@ -222,6 +385,21 @@ def group_exons(features, warnings):
                          f"ignored — only the first row of an Exon Group supplies qualifiers.", warnings)
 
     return grouped
+
+
+def is_monotonic_ascending(intervals):
+    """True if each interval's start comes strictly after the previous
+    interval's end — i.e. ordinary ascending, non-wrapping order. Used to
+    detect a circular-origin-spanning feature (plus strand only)."""
+    for i in range(1, len(intervals)):
+        try:
+            prev_end = float(intervals[i - 1][1])
+            this_start = float(intervals[i][0])
+        except (TypeError, ValueError):
+            return True  # can't tell — don't flag as a wrap
+        if this_start <= prev_end:
+            return False
+    return True
 
 
 def parse_other_qualifiers(text):
@@ -286,7 +464,8 @@ def check_ranges(intervals, seq_length, warnings, row_label, key):
 
 def outer_bounds(intervals):
     """Overall min/max across every coordinate in a (possibly multi-interval)
-    feature, used for the single-span paired gene feature of a spliced CDS."""
+    feature, used for the single-span paired gene feature of an ordinary
+    (non-origin-wrapping) spliced CDS."""
     coords = []
     for s_raw, e_raw in intervals:
         try:
@@ -322,6 +501,11 @@ def build_feature_table(record, features, seq_length, warnings):
         if key not in VALID_FEATURE_KEYS:
             warn(f"Row {feat['row']}: unrecognized feature key '{key}' — skipped.", warnings)
             continue
+        if key == "source":
+            # BankIt collects organism/strain/etc. through its own web form;
+            # a source row here would be unusual, but pass it through
+            # generically rather than reject it outright.
+            pass
 
         def ql(k, v=None, _row=feat["row"]):
             return qual_line(k, v, warnings, _row)
@@ -340,23 +524,53 @@ def build_feature_table(record, features, seq_length, warnings):
         gp_label = f"gp{int(float(gene_num))}" if gene_num not in ("", None) else None
 
         if key == "CDS":
-            # paired gene feature first — single span covering the outer
-            # bounds only, even if the CDS itself is spliced across exons.
-            gmin, gmax = outer_bounds(intervals)
-            if gmin is None:
-                warn(f"Row(s) {row_label}: could not compute gene span — gene feature skipped.", warnings)
-            else:
-                g_s, g_e = numeric_str(gmin), numeric_str(gmax)
-                if feat["partial5"]:
-                    g_s = "<" + g_s
-                if feat["partial3"]:
-                    g_e = ">" + g_e
-                lines.append(f"{g_s}\t{g_e}\tgene")
+            # Paired gene feature first. Ordinarily a single span covering
+            # the outer bounds only, even if the CDS itself is spliced
+            # across exons — EXCEPT when the exons aren't in ascending
+            # order (a circular-origin wrap, plus strand only): then the
+            # gene gets the same multi-interval location as the CDS,
+            # because a min/max span would incorrectly claim the gene
+            # covers the entire genome in between the wrapped pieces.
+            # Only checked for plus-strand groups: a normal minus-strand
+            # spliced group is legitimately non-ascending in entry order
+            # (see module docstring — that's the expected transcription-
+            # order convention there, not a wrap), so applying this same
+            # check to minus-strand groups would misfire on every ordinary
+            # spliced minus-strand feature.
+            try:
+                first_is_plus = float(intervals[0][0]) <= float(intervals[0][1])
+            except (TypeError, ValueError):
+                first_is_plus = True
+            origin_wrap = (len(intervals) > 1 and first_is_plus and
+                           not is_monotonic_ascending(intervals))
+            if origin_wrap:
+                warn(f"Row(s) {row_label}: Exon Group intervals are not in ascending order — "
+                     f"treating this as a circular-origin-spanning feature (plus strand). If that's "
+                     f"not what you intended, check the Start/End values.", warnings)
+                lines.append(f"{decorated[0][0]}\t{decorated[0][1]}\tgene")
+                for s, e in decorated[1:]:
+                    lines.append(f"{s}\t{e}")
                 if locus_tag:
                     lines.append(ql("locus_tag", locus_tag))
                 else:
                     warn(f"Row(s) {row_label}: CDS has no Gene # — gene feature written without a locus_tag.",
                          warnings)
+            else:
+                gmin, gmax = outer_bounds(intervals)
+                if gmin is None:
+                    warn(f"Row(s) {row_label}: could not compute gene span — gene feature skipped.", warnings)
+                else:
+                    g_s, g_e = numeric_str(gmin), numeric_str(gmax)
+                    if feat["partial5"]:
+                        g_s = "<" + g_s
+                    if feat["partial3"]:
+                        g_e = ">" + g_e
+                    lines.append(f"{g_s}\t{g_e}\tgene")
+                    if locus_tag:
+                        lines.append(ql("locus_tag", locus_tag))
+                    else:
+                        warn(f"Row(s) {row_label}: CDS has no Gene # — gene feature written without a locus_tag.",
+                             warnings)
 
             lines.append(f"{decorated[0][0]}\t{decorated[0][1]}\tCDS")
             for s, e in decorated[1:]:
@@ -370,6 +584,18 @@ def build_feature_table(record, features, seq_length, warnings):
             codon_start = feat["codon_start"] or "1"
             lines.append(ql("transl_table", transl_table))
             lines.append(ql("codon_start", codon_start))
+            if feat.get("exception"):
+                lines.append(ql("exception", feat["exception"]))
+            single_strand = "+"
+            if len(intervals) == 1:
+                try:
+                    if float(intervals[0][0]) > float(intervals[0][1]):
+                        single_strand = "-"
+                except (TypeError, ValueError):
+                    pass
+            for val in parse_transl_except(feat.get("transl_except"), intervals, single_strand,
+                                            codon_start, warnings, row_label):
+                lines.append(ql("transl_except", val))
             if feat["note"]:
                 lines.append(ql("note", feat["note"]))
             for k, v in parse_other_qualifiers(feat["other"]):
@@ -386,13 +612,13 @@ def build_feature_table(record, features, seq_length, warnings):
             for k, v in parse_other_qualifiers(feat["other"]):
                 lines.append(ql(k, v))
 
-        else:  # tRNA, rRNA, misc_feature, mat_peptide
+        else:  # mat_peptide, tRNA/rRNA/etc., and the wider generic INSDC keys
             lines.append(f"{decorated[0][0]}\t{decorated[0][1]}\t{key}")
             for s, e in decorated[1:]:
                 lines.append(f"{s}\t{e}")
             if feat["product"]:
                 lines.append(ql("product", feat["product"]))
-            elif key in ("tRNA", "rRNA", "mat_peptide"):
+            elif key == "mat_peptide" or key in RNA_PRODUCT_KEYS:
                 warn(f"Row(s) {row_label}: {key} has no Product — recommended "
                      f"(required by NCBI for mat_peptide).", warnings)
             if feat["note"]:
@@ -403,25 +629,88 @@ def build_feature_table(record, features, seq_length, warnings):
     return "\n".join(lines) + "\n"
 
 
+def convert_one_segment(record, raw_features, seq_length, warnings):
+    features = group_exons(raw_features, warnings)
+    return build_feature_table(record, features, seq_length, warnings)
+
+
+def detect_segments(wb):
+    """Look for repeated "Record Info (X)"/"Sequence (X)"/"Features (X)"
+    sheet triplets. Returns a list of (label, record_ws, sequence_ws,
+    features_ws) tuples in first-seen order, or None if the workbook uses
+    the plain single-segment sheet names ("Record Info"/"Sequence"/
+    "Features")."""
+    if {"Record Info", "Sequence", "Features"}.issubset(set(wb.sheetnames)):
+        return None
+
+    pattern = re.compile(r"^(Record Info|Sequence|Features)\s*\((.+)\)\s*$")
+    labels = []
+    seen = set()
+    for name in wb.sheetnames:
+        m = pattern.match(name)
+        if m:
+            label = m.group(2).strip()
+            if label not in seen:
+                seen.add(label)
+                labels.append(label)
+
+    if not labels:
+        return None
+
+    segments = []
+    for label in labels:
+        rec_name, seq_name, feat_name = (f"Record Info ({label})", f"Sequence ({label})",
+                                          f"Features ({label})")
+        missing = [n for n in (rec_name, seq_name, feat_name) if n not in wb.sheetnames]
+        if missing:
+            raise ConversionError(f"Segment '{label}' is missing sheet(s): {', '.join(missing)}.")
+        segments.append((label, wb[rec_name], wb[seq_name], wb[feat_name]))
+    return segments
+
+
 def convert(xlsx_path, out_path):
     warnings = []
     wb = load_workbook(xlsx_path, data_only=True)
-    if "Record Info" not in wb.sheetnames:
-        raise ConversionError("Workbook has no 'Record Info' sheet.")
-    if "Features" not in wb.sheetnames:
-        raise ConversionError("Workbook has no 'Features' sheet.")
 
-    record = read_record_info(wb["Record Info"])
-    raw_features = read_features(wb["Features"])
-    features = group_exons(raw_features, warnings)
-    seq_length = read_sequence_length(wb, warnings)
+    segments = detect_segments(wb)
+    fasta_text = None
 
-    text = build_feature_table(record, features, seq_length, warnings)
+    if segments is None:
+        if "Record Info" not in wb.sheetnames:
+            raise ConversionError("Workbook has no 'Record Info' sheet.")
+        if "Features" not in wb.sheetnames:
+            raise ConversionError("Workbook has no 'Features' sheet.")
+        record = read_record_info(wb["Record Info"])
+        raw_features = read_features(wb["Features"])
+        seq_length = read_sequence_length(wb["Sequence"], warnings) if "Sequence" in wb.sheetnames else None
+        text = convert_one_segment(record, raw_features, seq_length, warnings)
+    else:
+        blocks = []
+        fasta_blocks = []
+        for label, rec_ws, seq_ws, feat_ws in segments:
+            record = read_record_info(rec_ws)
+            raw_features = read_features(feat_ws)
+            seq = read_sequence_text(seq_ws, warnings)
+            seq_length = None if seq is None else len(seq)
+            blocks.append(convert_one_segment(record, raw_features, seq_length, warnings))
+            seg_name = record.get("Locus/Sequence Name", "") or label
+            if seq:
+                fasta_blocks.append(fasta_wrap(seg_name, seq))
+        text = "\n".join(blocks)
+        fasta_text = "".join(fasta_blocks)
 
     with open(out_path, "w", newline="\n") as f:
         f.write(text)
 
-    return text, warnings
+    fasta_path = None
+    if fasta_text is not None:
+        fasta_path = re.sub(r"\.(tbl\.txt|txt|tbl)$", "", out_path) + ".fsa"
+        if fasta_path == out_path:
+            fasta_path = out_path + ".fsa"
+        with open(fasta_path, "w", newline="\n") as f:
+            f.write(fasta_text)
+
+    return text, warnings, fasta_path
 
 
 def main():
@@ -432,12 +721,14 @@ def main():
     out_path = sys.argv[2] if len(sys.argv) > 2 else re.sub(r"\.xlsx$", ".tbl.txt", xlsx_path)
 
     try:
-        text, warnings = convert(xlsx_path, out_path)
+        text, warnings, fasta_path = convert(xlsx_path, out_path)
     except ConversionError as e:
         print(f"ERROR: {e}")
         sys.exit(1)
 
     print(f"Wrote {out_path}")
+    if fasta_path:
+        print(f"Wrote companion multi-FASTA {fasta_path} (this is a multi-segment workbook)")
     if warnings:
         print(f"\n{len(warnings)} warning(s):")
         for w in warnings:

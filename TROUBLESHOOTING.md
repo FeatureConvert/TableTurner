@@ -1,65 +1,194 @@
 # Troubleshooting
 
-**Note: this is beta software (v1.1.0-beta), not yet widely tested.** Validated against one real published genome so far, not across multiple labs or datasets — if you hit something not covered here, it may genuinely be new. See the "Still stuck?" section below.
+Common warnings, errors, and gotchas across `xlsx_to_feature_table.py`,
+`xlsx_to_genbank.py`, and `codon_trna_report.py`, plus pre-submission
+validation steps to run before actually uploading to NCBI. If you hit
+something not covered here, check the comments in the relevant script —
+every non-obvious decision is explained inline with the worked example or
+bug report that motivated it.
 
-Common errors, warnings, and gotchas — and what to do about each.
+## Reading warnings
 
-## Setup errors
+Neither converter treats a warning as fatal — the script still writes its
+output file. A warning means "a human should look at this row before
+trusting the output," not "the run failed." Warnings print after the
+"Wrote ..." line; if you don't see any, the run had none.
 
-**`ModuleNotFoundError: No module named 'openpyxl'`**
-Install the one dependency the scripts need: `pip install openpyxl` (or `pip install openpyxl --break-system-packages` if your Python is externally managed).
+### "CDS has no Product — BankIt requires one" / "GenBank/BankIt requires one"
 
-**`ERROR: Workbook has no 'Record Info' sheet.` / `...no 'Features' sheet.`**
-The scripts look for sheets named exactly `Record Info`, `Sequence`, and `Features`. This usually means you're pointing the script at a workbook that isn't a copy of `GenBank_Annotation_Template.xlsx`, or a sheet got renamed/deleted. Start from a fresh copy of the template if you're not sure.
+NCBI requires every CDS to have a `/product`. If left blank, both scripts
+substitute "hypothetical protein" so the file is still syntactically valid,
+but you should fill in a real product name before submitting — an
+all-"hypothetical protein" genome looks unannotated even if your
+coordinates and translations are perfect.
 
-**`ERROR: refusing to overwrite the input file (...)`**
-You ran a script without an output filename and the auto-generated output name matched the input name (or you passed the same name for both). Give it an explicit output name, e.g.:
-```
-python3 xlsx_to_feature_table.py your_file.xlsx output.tbl.txt
-```
+### "translation came out empty — check start/end/strand/codon_start"
 
-## Warnings the scripts print (these are informational, not fatal)
+The single most useful warning this tool produces. It means the Start/End/
+strand/Codon Start combination produced zero amino acids before hitting a
+stop codon — almost always a coordinate typo (off-by-one, wrong strand
+direction, or a Start/End that lands mid-intron). In real testing, this
+warning caught an actual typo in a hand-edited feature table (a gene line
+whose start and end were the same number instead of the CDS's real span).
+Treat it as "go check this row's coordinates," not a tool bug.
 
-**`translation came out empty — check start/end/strand/codon_start`**
-The Start/End coordinates for that CDS row produce a zero-length or nonsensical span once strand is applied. Almost always a typo in the Start or End cell for that row — go check it. (This is exactly the kind of issue the warning system exists to catch; see the Moonfish example's validation report for a real instance.)
+### "Exon Group '<name>' mixes rows whose Start/End imply different strands"
 
-**`CDS has no Product — BankIt requires one`**
-Fill in the Product column for that row before submitting — NCBI's BankIt will reject a CDS with no product.
+Every row in an Exon Group must agree on strand (all Start < End, or all
+Start > End). This fires when they don't — check for a row where you
+transposed Start and End, or copy-pasted the wrong pair of coordinates.
 
-**`... has no Gene # — gene feature written without a locus_tag`**
-That CDS/gene row has no Gene # filled in, so the auto-generated paired `gene` feature has no `locus_tag`. Add a Gene # if this feature should have one, or ignore the warning if that's intentional.
+### "<field> on an Exon Group '<name>' continuation row is ignored"
 
-**`location X..Y is out of range for a N-bp sequence`**
-The Start/End for that row falls outside 1..N, where N is the total length of whatever you entered on the Sequence sheet. Usually means either a coordinate typo or the Sequence sheet is missing some chunks (see below).
+Only the FIRST row of an Exon Group carries qualifiers (Product, Gene #,
+Note, Other Qualifiers, and in `xlsx_to_genbank.py` also Protein ID,
+db_xref, Exception, Transl Except, Translation Override). If you filled in
+one of these fields on a later exon row, this warns you it was ignored —
+move the value to the first row of the group.
 
-**`Sequence contains unexpected characters: [...]`**
-Something other than standard IUPAC nucleotide codes showed up in the Sequence sheet — could be a stray character from copy-pasting out of another tool. Worth a look before trusting the coordinates.
+### "Transl Except is only supported for a non-spliced (single-interval) CDS — skipped"
 
-**`qualifier '...' contained a tab/newline character — replaced with a space`**
-A cell (usually Note or Product) had a literal tab or line break in it, which would corrupt the tab-delimited feature table format. The script already fixed it for you; just an FYI.
+Transl Except only works on a CDS with no Exon Group (a single Start/End
+pair). Computing which genomic interval a codon number falls in across an
+intron boundary isn't implemented. If you need a readthrough/selenocysteine
+exception on a spliced CDS, you'll need to compute the genomic location by
+hand and add the `/transl_except` qualifier directly to the output file
+(or split the CDS's Exon Group differently so the exception codon falls
+in a single-interval piece, if the biology allows it).
 
-## Data-entry gotchas
+### "codon <N> in Transl Except is out of range for this CDS — skipped"
 
-**Long sequences split across multiple cells**
-Excel caps a single cell at ~32,767 characters, which real genomes (like Moonfish's 69,166 bp) exceed. Split the sequence across multiple cells in column A of the Sequence sheet, one chunk per cell, in order, starting at row 2 — the scripts concatenate them automatically. Don't try to cram the whole thing into one cell.
+The codon number you gave (e.g. "142" in "142:Trp") doesn't fall within the
+CDS's length given its Codon Start. Double check: codon numbers count from
+1 at the first codon AFTER any Codon Start offset, not from the raw
+genomic Start. Also check you didn't transpose Start/End for a minus-strand
+CDS — this warning is what an earlier version of `xlsx_to_feature_table.py`
+spuriously showed for every minus-strand readthrough CDS due to a real bug
+(now fixed) that computed a negative CDS length; if you see this on a
+minus-strand row and are confident the codon number is right, make sure
+you're running the current version of the script.
 
-**Strand is inferred from Start vs. End, not a separate column**
-If Start < End, the feature is `+` strand. If Start > End (the bigger number goes in the Start column), it's `-` strand. There's no separate Strand column to fill in — entering the numbers "backwards" for a minus-strand gene is correct, not a mistake.
+### "unrecognized amino acid code '<x>' in Transl Except — qualifier skipped"
 
-**Don't add a separate `gene` row for every CDS**
-Both scripts auto-generate the paired `gene` feature for each CDS row. Adding your own `gene` row for the same gene will produce a duplicate.
+Accepted forms: one-letter code (e.g. "W"), three-letter code (e.g. "Trp"),
+"Sec"/"U" for selenocysteine, "Pyl"/"O" for pyrrolysine, "TERM" for a true
+stop, or "OTHER". Anything else is rejected rather than guessed at — check
+for a typo.
 
-**Alternate start codons (GTG, TTG, etc.) are only recognized for `transl_table` 1 and 11**
-The template defaults to `transl_table=11` (bacteria/archaea/phage), which recognizes TTG, CTG, ATT, ATC, ATA, ATG, and GTG as valid alternate start codons that translate as Met. `transl_table=1` (standard code) only recognizes ATG. If you're using a different genetic code table and a gene's translation looks wrong at the first residue, this is likely why — open a GitHub issue if you need another table's start codons supported.
+### "'<key>' doesn't take a /product qualifier per the INSDC spec — the Product column value was folded into Note instead"
 
-**locus_tag naming (`Name_gp1` vs `Name_1`) doesn't match the published NCBI record**
-This is expected, not a bug — see `examples/moonfish/README.md` for a full explanation. NCBI's own curation sometimes reformats locus_tags during submission processing; the tool preserves whatever convention you're already using in your source data rather than silently changing it. This is a confirmed design decision (the `Name_gp{N}` default matches this lab's own convention), not something the tool will auto-detect or switch for you — if your lab uses a different locus_tag convention, you'll need to adjust the generated output manually (or your source data's Gene # / naming) to match.
+Some feature keys (5'UTR, 3'UTR, repeat_region, regulatory, operon,
+stem_loop, and others) don't support `/product` per the INSDC spec. If you
+put something in the Product column for one of these, it's preserved (in
+`/note`) rather than silently dropped, but you'll want to move
+qualifier-appropriate data to Other Qualifiers instead — e.g.
+`regulatory_class=promoter` for a `regulatory` feature, or
+`rpt_type=long_terminal_repeat` for a `repeat_region`.
 
-**CDS count in your draft doesn't match the eventually-published record**
-Also expected — NCBI curation can merge or remove features between submission and publication (documented with a real example in `examples/moonfish/README.md`).
+### "Exon Group intervals are not in ascending order — treating this as a circular-origin-spanning feature"
 
-## Still stuck?
+This fires when a plus-strand Exon Group's Start/End pairs aren't in
+increasing genomic order — the tool assumes you meant a feature that wraps
+around a circular genome's origin (like a geminivirus Rep gene) and handles
+it accordingly. If that's NOT what you intended, you likely have exon rows
+in the wrong order, or mixed up which row goes first — check your Start/End
+values. Minus-strand origin wraps aren't detected this way (the correct
+syntax there needs `join(complement(...),complement(...))`, not
+implemented) — if you have one, you'll need to hand-edit the output.
 
-- **Tool bugs / script errors / anything that looks like a defect in the conversion logic:** open an issue at [github.com/FeatureConvert/TableTurner/issues](https://github.com/FeatureConvert/TableTurner/issues).
-- **"Is this the right way to annotate this feature" / other biology judgment calls:** that's a GenBank/NCBI question, not the tool — see the README's "Questions / support" section for where to look.
-- **Every time you use the tool:** verify the output yourself before submitting — no second reviewer is required, but the person running the tool is responsible for checking it. See "Verifying the output" in `GenBank_Protocol.docx`.
+### "unrecognized feature key '<key>' — skipped"
+
+The Feature Key column has a value that isn't in the ~50-key INSDC
+vocabulary (or is misspelled/miscapitalized — feature keys are
+case-sensitive, e.g. "CDS" not "cds", "5'UTR" not "5'utr"). Check spelling
+against https://www.insdc.org/submitting-standards/feature-table/.
+
+### Sequence contains unexpected characters
+
+The Sequence sheet has characters outside the IUPAC nucleotide alphabet
+(ACGTUNRYSWKMBDHV). Usually a paste artifact (stray whitespace inside a
+sequence chunk cell, a header row that got included, or the sequence in
+protein rather than nucleotide letters). The scripts keep the characters
+as-is (they don't reject the run) but flag them since they'll produce a
+wrong or unusual translation.
+
+## Known gaps (things the tool does NOT check for you)
+
+- **mobile_element's mandatory `/mobile_element_type` qualifier** —
+  reachable via Other Qualifiers, but the tool does not warn you if you
+  forget it. NCBI's own validation (table2asn) will catch this at
+  submission time if you miss it.
+- **No cross-feature validation at all.** Neither converter checks whether
+  two features make biological sense together (overlapping genes,
+  a CDS entirely inside another feature, gene/CDS span mismatches beyond
+  the auto-generated pairing). This is why HBV-style overlapping reading
+  frames "just work" — nothing stops you from creating genuinely wrong
+  overlaps too. Use table2asn / the NCBI Discrepancy Report for this class
+  of check (see below).
+- **RNA-edited transcripts are not derived, ever.** If you set Exception
+  without also giving a Translation Override, the `.gb` output simply omits
+  `/translation` for that CDS (with a warning) rather than guessing.
+- **Minus-strand circular-origin wraps.** Only the plus-strand form is
+  detected and handled.
+
+## Pre-submission validation checklist
+
+Do these roughly in order of effort, and don't skip straight to the last
+one — each catches a different class of problem:
+
+1. **Read every warning the script prints.** Free, and catches the most
+   common mistakes (see above).
+2. **Biopython round-trip** — confirms the file parses and CDS
+   translations recompute identically from the DNA:
+   ```
+   python3 -c "
+   from Bio import SeqIO
+   for r in SeqIO.parse('output.gb', 'genbank'):
+       print(r.id, len(r.seq), len(r.features))
+       for f in r.features:
+           if f.type == 'CDS' and 'translation' in f.qualifiers:
+               if f.qualifiers.get('exception') or f.qualifiers.get('transl_except'):
+                   continue
+               declared = f.qualifiers['translation'][0]
+               try:
+                   recomputed = str(f.extract(r.seq).translate(table=11, to_stop=True, cds=True))
+               except Exception as e:
+                   print('  (cds=True check skipped:', e, ')')
+                   continue
+               print('  OK' if declared == recomputed else f'  MISMATCH: {declared} vs {recomputed}')
+   "
+   ```
+   This does NOT check CDS's with `/transl_except` or `/exception` — verify
+   those by hand (see "Worked examples" in `PROTOCOL.md`) or trust a
+   supplied Translation Override. It also will not catch a
+   syntactically-valid-but-wrong record, like the historical
+   backwards-`join()`-order bug this tool had during development — a
+   frameshifted protein is still a "valid" translation as far as Biopython
+   is concerned.
+3. **Hand-compute the expected output for at least one feature per feature
+   type you used** (one mat_peptide boundary, one spliced join(), one
+   transl_except position, the origin wrap, one segment of a multi-segment
+   record) and compare to the tool's output. This is genuinely the
+   strongest check available, and it's how every real bug in this tool's
+   own development was caught.
+4. **Run NCBI's `table2asn`, or review the Discrepancy Report it
+   generates**, before actually submitting. This checks things this tool
+   deliberately doesn't attempt: biological plausibility of overlaps,
+   mandatory-qualifier completeness for specific feature types, and
+   BankIt/WebSub's own submission-time validation rules. This tool's output
+   should be "structurally correct and ready for human/NCBI review," not
+   "guaranteed to pass with zero flags" — those are different bars.
+
+## `codon_trna_report.py`-specific notes
+
+- It requires `xlsx_to_genbank.py` to be in the same directory — it imports
+  that script rather than duplicating its logic, so if you see
+  `ModuleNotFoundError` or the "ERROR: this script must be run from the
+  same directory" message, copy both files together.
+- If a tRNA row's Product text doesn't match a recognizable pattern (e.g.
+  "tRNA-Ile", "tRNA-fMet", "tRNA-SeC", "tRNA-Leu1"), it's reported as
+  "UNPARSED" in the text report rather than guessed at — fix the Product
+  text to a recognizable form, or check by hand.
+- "Amino acids with real codon usage but NO annotated cognate tRNA" is
+  informational, not necessarily an error — many phages rely on host
+  tRNAs for some amino acids rather than encoding a complete set.

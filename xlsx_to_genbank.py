@@ -79,6 +79,61 @@ v3 additions (for viruses beyond simple non-spliced dsDNA phage genomes):
     matching the INSDC spec's own description of complement(join(...))
     ("joins regions..., then complements the joined segments") — before
     applying the same Met-start-codon convention used for unspliced CDSs.
+
+v4 additions (broader virus/genome coverage):
+  - VALID_FEATURE_KEYS now covers the full INSDC feature key vocabulary
+    (confirmed against https://www.insdc.org/submitting-standards/feature-table/),
+    not just the handful this tool originally special-cased. Feature keys
+    confirmed to take a /product qualifier (misc_feature, sig_peptide,
+    propeptide, transit_peptide, D_segment, N_region, plus the RNA keys
+    already handled) get one if the Product column is filled in; keys that
+    don't take /product per spec (5'UTR, 3'UTR, repeat_region, regulatory,
+    operon, stem_loop, mobile_element, etc.) fold a non-blank Product into
+    /note instead, with a warning, rather than silently emitting a
+    spec-invalid qualifier or silently dropping what the user typed. Two
+    qualifiers that come up often with these keys are reachable through
+    the existing Other Qualifiers column: `regulatory_class=promoter` (or
+    terminator, ribosome_binding_site, etc.) for a `regulatory` feature,
+    and `rpt_type=long_terminal_repeat` (or inverted, direct, dispersed,
+    etc.) for `repeat_region` — the modern, correct way to annotate
+    retroviral LTRs and viral inverted terminal repeats (INSDC dropped the
+    old standalone "LTR"/"inverted_repeat" keys in favor of repeat_region +
+    rpt_type). mobile_element additionally has a MANDATORY
+    /mobile_element_type qualifier — also reachable via Other Qualifiers,
+    and the tool does not currently warn if it's missing (a real gap; see
+    TROUBLESHOOTING.md).
+  - Exception, Transl Except, and Translation Override columns, for CDS
+    features. Exception writes /exception="..." (e.g. "RNA editing" for
+    paramyxovirus P/V/W-style edited transcripts, or "trans-splicing") and,
+    unless a Translation Override is also given, suppresses the computed
+    /translation — a direct extraction from the genomic sequence would not
+    reflect the actual edited/spliced product, so this tool doesn't
+    pretend to compute one. Transl Except writes one or more
+    /transl_except=(pos:<location>,aa:<amino_acid>) qualifiers for a
+    single-codon deviation from the standard translation — most commonly a
+    stop-codon readthrough (alphaviruses, some plant viruses) or
+    selenocysteine incorporation — and this tool DOES correctly recompute
+    the translation around it (continuing past the stop rather than
+    truncating there), because that's fully derivable from the genomic
+    sequence plus the one stated exception. You give the codon NUMBER
+    within the CDS (e.g. "142:Trp"); the genomic location is computed for
+    you. Only supported for non-spliced (single-interval) CDS rows — see
+    the parse_transl_except_gb docstring for why. Translation Override lets
+    you supply the real protein sequence directly whenever the tool can't
+    derive it (RNA-edited or trans-spliced transcripts); when given, it's
+    used verbatim and no translation is computed.
+  - Native multi-segment workbooks: a workbook may contain repeated sheet
+    triplets named "Record Info (X)"/"Sequence (X)"/"Features (X)" (X = a
+    segment label, e.g. "PB2") for genomes like influenza or bunyaviruses
+    where each segment is its own GenBank record. A plain "Record Info"/
+    "Sequence"/"Features" workbook (no suffix) is unchanged (single
+    segment). Multi-segment output is one .gb file containing multiple
+    concatenated LOCUS...// records — a standard, Biopython-`SeqIO.parse`-
+    readable multi-record GenBank file.
+  - Plus-strand circular-origin-spanning features: mirrors the same
+    detection and gene-span fix described in xlsx_to_feature_table.py's
+    v4 changelog. Minus-strand origin-spanning features remain
+    unsupported (flagged with a warning), for the same reason given there.
 """
 import sys
 import re
@@ -91,8 +146,37 @@ FEATURE_KEY_COL = 6      # 1-based column where the feature key starts
 QUALIFIER_COL = 22       # 1-based column where location/qualifiers start
 QUAL_INDENT = " " * (QUALIFIER_COL - 1)
 
-VALID_FEATURE_KEYS = {"source", "gene", "CDS", "misc_feature", "rRNA", "tRNA", "mat_peptide"}
+# Full INSDC feature key vocabulary (source: official DDBJ/ENA/GenBank
+# Feature Table Definition, https://www.insdc.org/submitting-standards/feature-table/).
+VALID_FEATURE_KEYS = {
+    "assembly_gap", "C_region", "CDS", "centromere", "D-loop", "D_segment",
+    "exon", "gap", "gene", "iDNA", "intron", "J_segment", "mat_peptide",
+    "misc_binding", "misc_difference", "misc_feature", "misc_recomb",
+    "misc_RNA", "misc_structure", "mobile_element", "modified_base", "mRNA",
+    "ncRNA", "N_region", "old_sequence", "operon", "oriT", "polyA_site",
+    "precursor_RNA", "prim_transcript", "primer_bind", "propeptide",
+    "protein_bind", "regulatory", "repeat_region", "rep_origin", "rRNA",
+    "S_region", "sig_peptide", "source", "stem_loop", "STS", "telomere",
+    "tmRNA", "transit_peptide", "tRNA", "unsure", "V_region", "V_segment",
+    "variation", "3'UTR", "5'UTR",
+}
+
+# Feature keys (besides CDS/mat_peptide, handled separately) confirmed by
+# the INSDC spec to take a /product qualifier.
+RNA_PRODUCT_KEYS = {"tRNA", "rRNA", "tmRNA", "ncRNA", "misc_RNA", "precursor_RNA"}
+OTHER_PRODUCT_OK_KEYS = {"misc_feature", "sig_peptide", "propeptide", "transit_peptide",
+                          "D_segment", "N_region"}
 IUPAC_NT = set("ACGTUNRYSWKMBDHV")
+
+AA_1_TO_3 = {
+    "A": "Ala", "C": "Cys", "D": "Asp", "E": "Glu", "F": "Phe", "G": "Gly",
+    "H": "His", "I": "Ile", "K": "Lys", "L": "Leu", "M": "Met", "N": "Asn",
+    "P": "Pro", "Q": "Gln", "R": "Arg", "S": "Ser", "T": "Thr", "V": "Val",
+    "W": "Trp", "Y": "Tyr", "U": "Sec", "O": "Pyl", "*": "TERM",
+}
+AA_3_TO_1 = {v: k for k, v in AA_1_TO_3.items() if k not in ("U", "O", "*")}
+AA_3_TO_1.update({"Sec": "U", "Pyl": "O"})
+KNOWN_AA_3 = set(AA_1_TO_3.values()) | {"Xaa", "OTHER"}
 
 MOL_TYPE_TO_LOCUS = {
     "genomic DNA": "DNA", "genomic RNA": "RNA", "mRNA": "mRNA", "rRNA": "rRNA",
@@ -129,7 +213,7 @@ def reverse_complement(seq):
 START_CODONS = {"TTG", "CTG", "ATT", "ATC", "ATA", "ATG", "GTG"}  # table 11 alternate starts
 
 
-def translate_cds(seq_region, codon_start, warnings, label, partial5=False):
+def translate_cds(seq_region, codon_start, warnings, label, partial5=False, overrides=None):
     """seq_region is already strand-corrected and exon-joined (5'->3' coding
     sense), uppercase.
 
@@ -138,7 +222,16 @@ def translate_cds(seq_region, codon_start, warnings, label, partial5=False):
     translated as Met (M), even when it's an alternate start codon like GTG or
     TTG that would translate as Val/Leu anywhere else in the reading frame. This
     only applies when codon_start == 1 and the CDS is not 5'-partial (a partial
-    CDS's first codon is a mid-gene fragment, not a true start codon)."""
+    CDS's first codon is a mid-gene fragment, not a true start codon).
+
+    `overrides` is an optional {codon_number (1-based): one-letter amino acid}
+    map, built from the Transl Except column, for single-codon deviations
+    from the standard genetic code — most commonly a stop-codon readthrough.
+    When a stop codon is hit at a position with an override, translation
+    substitutes the given amino acid and CONTINUES past it (rather than
+    truncating there), since a readthrough product is by definition longer
+    than the "default" translation would be."""
+    overrides = overrides or {}
     try:
         codon_start = int(codon_start) if codon_start not in (None, "") else 1
     except ValueError:
@@ -146,6 +239,10 @@ def translate_cds(seq_region, codon_start, warnings, label, partial5=False):
     trimmed = seq_region[codon_start - 1:]
     protein = []
     for i in range(0, len(trimmed) - 2, 3):
+        codon_number = i // 3 + 1
+        if codon_number in overrides:
+            protein.append(overrides[codon_number])
+            continue
         codon = trimmed[i:i + 3]
         aa = CODON_TABLE.get(codon, "X")
         if aa == "*":
@@ -153,11 +250,89 @@ def translate_cds(seq_region, codon_start, warnings, label, partial5=False):
         protein.append(aa)
     if protein and codon_start == 1 and not partial5:
         first_codon = trimmed[0:3]
-        if first_codon in START_CODONS and protein[0] != "M":
+        if first_codon in START_CODONS and protein[0] != "M" and 1 not in overrides:
             protein[0] = "M"
     if not protein:
         warn(f"{label}: translation came out empty — check start/end/strand/codon_start.", warnings)
     return "".join(protein)
+
+
+def normalize_aa(raw, warnings, row_label):
+    """Accepts a 1-letter or 3-letter amino acid code; returns the 3-letter
+    INSDC form for the qualifier value, or None (with a warning) if
+    unrecognized."""
+    if not raw:
+        return None
+    raw = str(raw).strip()
+    if len(raw) == 1:
+        aa3 = AA_1_TO_3.get(raw.upper())
+        if aa3:
+            return aa3
+    else:
+        if raw.upper() == "TERM":
+            return "TERM"
+        if raw.upper() == "OTHER":
+            return "OTHER"
+        cap = raw[0].upper() + raw[1:].lower()
+        if cap in KNOWN_AA_3:
+            return cap
+    warn(f"Row(s) {row_label}: unrecognized amino acid code '{raw}' in Transl Except — qualifier skipped.",
+         warnings)
+    return None
+
+
+def parse_transl_except_gb(text, intervals, strand, codon_start, warnings, row_label):
+    """Parses a 'codonNumber:aa[|codonNumber:aa...]' Transl Except cell.
+    Returns a list of (codon_number, one_letter_aa, qualifier_value_string)
+    tuples. Only supported for a single-interval (non-spliced) CDS: mapping
+    a codon number to a genomic location across an intron boundary would
+    need to walk the exon/intron structure and hasn't been implemented or
+    tested, so a spliced CDS with Transl Except gets a warning and no
+    qualifier rather than risking a silently wrong location."""
+    if not text:
+        return []
+    if len(intervals) != 1:
+        warn(f"Row(s) {row_label}: Transl Except is only supported for a non-spliced "
+             f"(single-interval) CDS — skipped.", warnings)
+        return []
+    s, e = intervals[0]
+    length = e - s + 1
+    try:
+        cs = int(codon_start) if codon_start not in (None, "") else 1
+    except (TypeError, ValueError):
+        cs = 1
+
+    out = []
+    for chunk in str(text).split("|"):
+        chunk = chunk.strip()
+        if not chunk or ":" not in chunk:
+            continue
+        num_str, aa_str = chunk.split(":", 1)
+        try:
+            codon_number = int(float(num_str.strip()))
+        except ValueError:
+            warn(f"Row(s) {row_label}: could not parse codon number in Transl Except entry '{chunk}'.",
+                 warnings)
+            continue
+        offset = (cs - 1) + (codon_number - 1) * 3
+        if offset < 0 or offset + 3 > length:
+            warn(f"Row(s) {row_label}: codon {codon_number} in Transl Except is out of range "
+                 f"for this CDS — skipped.", warnings)
+            continue
+        if strand == "-":
+            g_end = e - offset
+            g_start = g_end - 2
+            loc = f"complement({g_start}..{g_end})"
+        else:
+            g_start = s + offset
+            g_end = g_start + 2
+            loc = f"{g_start}..{g_end}"
+        aa3 = normalize_aa(aa_str, warnings, row_label)
+        if aa3 is None:
+            continue
+        one_letter = AA_3_TO_1.get(aa3)
+        out.append((codon_number, one_letter, f"(pos:{loc},aa:{aa3})"))
+    return out
 
 
 def wrap_header_field(label, value, width=LINE_WIDTH):
@@ -397,6 +572,9 @@ def read_features(ws):
             "db_xref": get(r, "db_xref (gb only)"),
             "other": get(r, "Other Qualifiers (gb only, key=value|key=value)"),
             "exon_group": get(r, "Exon Group"),
+            "exception": get(r, "Exception"),
+            "transl_except": get(r, "Transl Except"),
+            "translation_override": get(r, "Translation Override"),
         }
         features.append(rec)
     return features
@@ -434,13 +612,30 @@ def group_exons(features, warnings):
             head["_exon_rows"].append(feat["row"])
             for field, label in (("product", "Product"), ("gene_num", "Gene #"), ("note", "Note"),
                                   ("protein_id", "Protein ID"), ("db_xref", "db_xref"),
-                                  ("other", "Other Qualifiers")):
+                                  ("other", "Other Qualifiers"), ("exception", "Exception"),
+                                  ("transl_except", "Transl Except"),
+                                  ("translation_override", "Translation Override")):
                 v = feat.get(field, "")
                 if v not in ("", None):
                     warn(f"Row {feat['row']}: {label} on an Exon Group '{eg}' continuation row is "
                          f"ignored — only the first row of an Exon Group supplies qualifiers.", warnings)
 
     return grouped
+
+
+def is_monotonic_ascending(intervals):
+    """True if each interval's start comes strictly after the previous
+    interval's end — i.e. ordinary ascending, non-wrapping order. Used to
+    detect a circular-origin-spanning feature (plus strand only)."""
+    for i in range(1, len(intervals)):
+        try:
+            prev_end = float(intervals[i - 1][1])
+            this_start = float(intervals[i][0])
+        except (TypeError, ValueError):
+            return True  # can't tell — don't flag as a wrap
+        if this_start <= prev_end:
+            return False
+    return True
 
 
 def parse_other_qualifiers(text):
@@ -459,13 +654,10 @@ def parse_other_qualifiers(text):
     return pairs
 
 
-def read_sequence_sheet(wb, warnings):
+def read_sequence_ws(ws, warnings):
     """Sequence lives on its own sheet (column A, from row 2 down, one chunk
     per cell) because Excel caps a single cell at ~32,767 characters, which
     real genomes routinely exceed."""
-    if "Sequence" not in wb.sheetnames:
-        raise ConversionError("Workbook has no 'Sequence' sheet.")
-    ws = wb["Sequence"]
     chunks = []
     for row in ws.iter_rows(min_row=2, min_col=1, max_col=1):
         v = row[0].value
@@ -481,6 +673,12 @@ def read_sequence_sheet(wb, warnings):
     if not seq:
         raise ConversionError("The 'Sequence' sheet has no valid nucleotide characters.")
     return seq
+
+
+def read_sequence_sheet(wb, warnings):
+    if "Sequence" not in wb.sheetnames:
+        raise ConversionError("Workbook has no 'Sequence' sheet.")
+    return read_sequence_ws(wb["Sequence"], warnings)
 
 
 def outer_bounds(intervals):
@@ -550,10 +748,33 @@ def build_genbank(record, features, seq, warnings):
     expanded = []
     for feat in features:
         if feat["feature_key"] == "CDS":
-            gmin, gmax = outer_bounds(feat["intervals"])
+            intervals = feat["intervals"]
             gene_feat = dict(feat)
             gene_feat["feature_key"] = "gene"
-            gene_feat["intervals"] = [(gmin, gmax)]
+            # Ordinarily the paired gene feature is a single span over the
+            # outer bounds only, even if the CDS itself is spliced across
+            # exons. EXCEPTION: if the exons aren't in ascending order for
+            # a plus-strand CDS, that's a circular-origin-spanning feature
+            # (e.g. a geminivirus Rep gene wrapping from near the end of a
+            # circular sequence back to position 1 — the INSDC spec's own
+            # worked example of this is join(2004..2195,3..20)) and a
+            # min/max span would be wrong: it would claim the gene covers
+            # the entire genome in between the two wrapped pieces. In that
+            # case the gene gets the same multi-interval join() as the CDS.
+            # Minus-strand origin wraps aren't detected/handled here — the
+            # correct INSDC representation needs the alternate
+            # join(complement(...),complement(...)) syntax, not implemented.
+            origin_wrap = (len(intervals) > 1 and feat["strand"] == "+" and
+                           not is_monotonic_ascending(intervals))
+            if origin_wrap:
+                warn(f"Row {feat['row']}: Exon Group intervals are not in ascending order — "
+                     f"treating this as a circular-origin-spanning feature (plus strand) and giving "
+                     f"the paired gene feature the same join() as the CDS. If that's not what you "
+                     f"intended, check the Start/End values.", warnings)
+                gene_feat["intervals"] = list(intervals)
+            else:
+                gmin, gmax = outer_bounds(intervals)
+                gene_feat["intervals"] = [(gmin, gmax)]
             gene_feat["product"] = ""
             gene_feat["protein_id"] = ""
             gene_feat["transl_table"] = ""
@@ -561,6 +782,9 @@ def build_genbank(record, features, seq, warnings):
             gene_feat["note"] = ""
             gene_feat["db_xref"] = ""
             gene_feat["other"] = ""
+            gene_feat["exception"] = ""
+            gene_feat["transl_except"] = ""
+            gene_feat["translation_override"] = ""
             if not feat.get("gene_num"):
                 warn(f"Row {feat['row']}: CDS has no Gene # — paired gene feature written without a locus_tag.",
                      warnings)
@@ -631,12 +855,17 @@ def build_genbank(record, features, seq, warnings):
             note_text = feat["note"] or ""
             if key == "CDS" and gp_label:
                 note_text = f"{note_text}; {gp_label}" if note_text else gp_label
+            transl_except_entries = []
             if key == "CDS":
-                # Qualifier order (note, codon_start, transl_table, product,
-                # protein_id) matches the order used in the real published
-                # record this converter was validated against (PQ613263).
+                # Qualifier order (note, exception, codon_start, transl_table,
+                # transl_except, product, protein_id) matches the order used
+                # in the real published record this converter was validated
+                # against (PQ613263), with the v4 exception/transl_except
+                # qualifiers slotted in alongside their closest relatives.
                 if note_text:
                     quals.append(("note", note_text))
+                if feat.get("exception"):
+                    quals.append(("exception", feat["exception"]))
                 tt = feat["transl_table"] or "11"
                 cs = feat["codon_start"] or "1"
                 if not feat["product"]:
@@ -644,10 +873,14 @@ def build_genbank(record, features, seq, warnings):
                          f"add a product before submitting.", warnings)
                 quals.append(("codon_start", cs, True))    # True = no quotes (numeric)
                 quals.append(("transl_table", tt, True))
+                transl_except_entries = parse_transl_except_gb(
+                    feat.get("transl_except"), norm_intervals, feat["strand"], cs, warnings, row_label)
+                for _, _, qual_val in transl_except_entries:
+                    quals.append(("transl_except", qual_val))
                 quals.append(("product", feat["product"] or "hypothetical protein"))
                 if feat["protein_id"]:
                     quals.append(("protein_id", feat["protein_id"]))
-            elif key in ("tRNA", "rRNA", "mat_peptide"):
+            elif key in RNA_PRODUCT_KEYS or key == "mat_peptide":
                 # product before note, matching the published record's order
                 if feat["product"]:
                     quals.append(("product", feat["product"]))
@@ -655,7 +888,22 @@ def build_genbank(record, features, seq, warnings):
                     warn(f"Row {row_label}: mat_peptide has no Product — NCBI requires one.", warnings)
                 if note_text:
                     quals.append(("note", note_text))
+            elif key == "gene":
+                # Real gene features never carry /product.
+                if note_text:
+                    quals.append(("note", note_text))
             else:
+                # The wider INSDC feature key vocabulary (5'UTR, repeat_region,
+                # regulatory, operon, stem_loop, etc.). Only the keys
+                # confirmed by the spec to take /product get one; anything
+                # else with a Product entry gets it folded into /note instead
+                # of emitting a non-standard qualifier.
+                if feat["product"] and key in OTHER_PRODUCT_OK_KEYS:
+                    quals.append(("product", feat["product"]))
+                elif feat["product"]:
+                    note_text = f"{note_text}; {feat['product']}" if note_text else feat["product"]
+                    warn(f"Row {row_label}: '{key}' doesn't take a /product qualifier per the INSDC "
+                         f"spec — the Product column value was folded into Note instead.", warnings)
                 if note_text:
                     quals.append(("note", note_text))
             if feat["db_xref"]:
@@ -673,8 +921,19 @@ def build_genbank(record, features, seq, warnings):
                 lines.extend(format_qualifier(k, v))
 
         if key == "CDS":
-            protein = translate_cds(region, feat["codon_start"] or 1, warnings, f"Row {row_label} CDS",
-                                     partial5=feat.get("partial5", False))
+            override = (feat.get("translation_override") or "").strip()
+            if override:
+                protein = re.sub(r"\s+", "", override).upper()
+            elif feat.get("exception"):
+                protein = ""
+                warn(f"Row {row_label}: CDS has /exception set — skipping the computed /translation "
+                     f"(a direct extraction from the genomic sequence wouldn't reflect the actual "
+                     f"edited/spliced product). Supply a Translation Override if you know the real "
+                     f"protein sequence.", warnings)
+            else:
+                overrides = {num: one for num, one, _ in transl_except_entries if one}
+                protein = translate_cds(region, feat["codon_start"] or 1, warnings, f"Row {row_label} CDS",
+                                         partial5=feat.get("partial5", False), overrides=overrides)
             if protein:
                 lines.extend(format_qualifier("translation", protein, is_translation=True))
 
@@ -689,20 +948,67 @@ def build_genbank(record, features, seq, warnings):
     return "\n".join(lines) + "\n"
 
 
+def convert_one_segment(record, raw_features, seq, warnings):
+    features = group_exons(raw_features, warnings)
+    return build_genbank(record, features, seq, warnings)
+
+
+def detect_segments(wb):
+    """Look for repeated "Record Info (X)"/"Sequence (X)"/"Features (X)"
+    sheet triplets, mirroring xlsx_to_feature_table.py's detect_segments().
+    Returns a list of (label, record_ws, sequence_ws, features_ws) tuples in
+    first-seen order, or None for a plain single-segment workbook."""
+    if {"Record Info", "Sequence", "Features"}.issubset(set(wb.sheetnames)):
+        return None
+
+    pattern = re.compile(r"^(Record Info|Sequence|Features)\s*\((.+)\)\s*$")
+    labels = []
+    seen = set()
+    for sheet_name in wb.sheetnames:
+        m = pattern.match(sheet_name)
+        if m:
+            label = m.group(2).strip()
+            if label not in seen:
+                seen.add(label)
+                labels.append(label)
+
+    if not labels:
+        return None
+
+    segments = []
+    for label in labels:
+        rec_name, seq_name, feat_name = (f"Record Info ({label})", f"Sequence ({label})",
+                                          f"Features ({label})")
+        missing = [n for n in (rec_name, seq_name, feat_name) if n not in wb.sheetnames]
+        if missing:
+            raise ConversionError(f"Segment '{label}' is missing sheet(s): {', '.join(missing)}.")
+        segments.append((label, wb[rec_name], wb[seq_name], wb[feat_name]))
+    return segments
+
+
 def convert(xlsx_path, out_path):
     warnings = []
     wb = load_workbook(xlsx_path, data_only=True)
-    if "Record Info" not in wb.sheetnames:
-        raise ConversionError("Workbook has no 'Record Info' sheet.")
-    if "Features" not in wb.sheetnames:
-        raise ConversionError("Workbook has no 'Features' sheet.")
 
-    record = read_record_info(wb["Record Info"])
-    raw_features = read_features(wb["Features"])
-    features = group_exons(raw_features, warnings)
-    seq = read_sequence_sheet(wb, warnings)
+    segments = detect_segments(wb)
 
-    gb_text = build_genbank(record, features, seq, warnings)
+    if segments is None:
+        if "Record Info" not in wb.sheetnames:
+            raise ConversionError("Workbook has no 'Record Info' sheet.")
+        if "Features" not in wb.sheetnames:
+            raise ConversionError("Workbook has no 'Features' sheet.")
+        record = read_record_info(wb["Record Info"])
+        raw_features = read_features(wb["Features"])
+        seq = read_sequence_sheet(wb, warnings)
+        gb_text = convert_one_segment(record, raw_features, seq, warnings)
+    else:
+        blocks = []
+        for label, rec_ws, seq_ws, feat_ws in segments:
+            record = read_record_info(rec_ws)
+            raw_features = read_features(feat_ws)
+            seq = read_sequence_ws(seq_ws, warnings)
+            blocks.append(convert_one_segment(record, raw_features, seq, warnings))
+        gb_text = "\n".join(blocks)
 
     with open(out_path, "w") as f:
         f.write(gb_text)
